@@ -1,11 +1,64 @@
 node_modules/
 .env
-config/topics.json
-config/settings.json
+bun.lock
+package-lock.json
+
+# runtime configs: private data (chat ids, topic names, paths, account slots)
+config/*.json
+!config/*.example.json
+config/*.bak.*
+
+# logs
+logs/
+*.log
+*.log.*
+*.out
+bot.err.log.*
+bot.out.log.*
+
+# backups / scratch
+*.bak
+*.bak.*
+*.mojibake
+*.retired-*
+git_*.tmp
+*.tmp
+/*.txt
+/*.cmd
+.do-*
+.git-commit-msg-*
+.commit-msg-*
+runner/*.txt
+runner/do-*.ps1
+
+# build output
+dist/
+.bun-build/
+.bun-build-check/
+.build-check/
 .tmp/
 .tmp-build/
 nul/
+
+# local-only templates and assets
 templates/openclaw-memory/
 templates/SOUL.md
 templates/main-memory.md
-bun.lock
+assets/
+
+# local drafts, agent settings, per-machine notes
+/CLAUDE.md
+/docs/
+/habr-*.md
+.claude/
+
+# runtime state
+.router.pid
+scripts/.last-restart
+scripts/.skills-payload/
+runner/data/
+_archive/
+
+# bat-wrappers carry per-machine secrets (webhook tokens) + local PATH
+scripts/start-router.cmd
+runner/scripts/start-runner.cmd

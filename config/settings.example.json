@@ -6,7 +6,11 @@
     "ttlMinutes": 30,
     "maxConcurrent": 5,
     "claudePath": "claude",
-    "defaultFlags": ["--dangerously-skip-permissions"]
+    "defaultFlags": ["--dangerously-skip-permissions"],
+    "defaultModel": "opus",
+    "idleTimeoutMinutes": 15,
+    "heartbeatAfterSeconds": 60,
+    "heartbeatIntervalSeconds": 60
   },
   "compaction": {
     "reserveTokens": 100000,
@@ -19,11 +23,22 @@
     "deduplication": true,
     "enabled": true
   },
+  "runner": {
+    "enabled": true,
+    "port": 7878
+  },
+  "browserPool": {
+    "enabled": false,
+    "brokerUrl": "http://127.0.0.1:8930"
+  },
   "projectsRoot": "C:/Users/YourName/Projects",
   "templatesDir": "./templates",
   "whisper": {
     "enabled": false,
     "url": "http://localhost:9000/asr",
-    "language": "ru"
+    "language": "ru",
+    "autoStart": true,
+    "startupTimeoutSeconds": 90,
+    "healthTimeoutMs": 1500
   }
 }

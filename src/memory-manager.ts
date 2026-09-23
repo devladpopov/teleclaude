@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "fs";
-import { join, resolve } from "path";
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, renameSync } from "fs";
+import { join, resolve, relative, dirname, basename } from "path";
 import type { Settings } from "./config";
+import { MEMORY_BASE_DIR } from "./config";
 
 /**
  * Memory Manager — periodically reviews and organizes memory files.
@@ -9,8 +10,31 @@ import type { Settings } from "./config";
  * - Detect duplicate content across memory files
  * - Remove empty sections and excessive whitespace
  * - Cross-file deduplication within a project's memory/ directory
+ * - TTL-based expiration: move expired memories to archive/
  * - Log revision statistics
  */
+
+type DocStatus = "draft" | "current" | "stale" | "superseded" | "archive";
+type DocGenre = "project" | "person" | "service" | "reference" | "decision" | "log";
+
+interface MemoryFrontmatter {
+  created?: string;
+  ttl?: string | null;
+  priority?: string;
+  status?: DocStatus;
+  genre?: DocGenre;
+  verified?: string;       // YYYY-MM-DD last checked against reality
+  superseded_by?: string;  // path to successor document
+  [key: string]: unknown;
+}
+
+/** Tombstone entry for deleted/archived files */
+interface TombstoneEntry {
+  file: string;
+  date: string;
+  reason: string;
+  successor?: string;
+}
 export class MemoryManager {
   private settings: Settings;
   private revisionTimer: ReturnType<typeof setInterval> | null = null;
@@ -78,6 +102,12 @@ export class MemoryManager {
     }
 
     console.log(`[MemoryManager] Revision complete. ${revisedCount}/${totalProjects} files updated.`);
+
+    // TTL check on global memory files
+    const ttlResult = this.checkTTLExpiration();
+    if (ttlResult.archived > 0) {
+      console.log(`[MemoryManager] TTL: archived ${ttlResult.archived} expired files, ${ttlResult.stale} marked stale.`);
+    }
   }
 
   /**
@@ -273,6 +303,270 @@ export class MemoryManager {
     }
     return null;
   }
+
+  // ─── TTL EXPIRATION ────────────────────────────────────────────
+
+  /**
+   * Parse YAML frontmatter from a markdown file.
+   */
+  private parseFrontmatter(content: string): { fields: MemoryFrontmatter; body: string } {
+    const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+    if (!match) return { fields: {}, body: content };
+
+    const fields: MemoryFrontmatter = {};
+    for (const line of match[1].split("\n")) {
+      const kv = line.match(/^(\w[\w-]*):\s*(.*)$/);
+      if (kv) {
+        const val = kv[2].trim();
+        if (val === "null" || val === "") fields[kv[1]] = null;
+        else if (val === "true") fields[kv[1]] = true;
+        else if (val === "false") fields[kv[1]] = false;
+        else fields[kv[1]] = val;
+      }
+    }
+    return { fields, body: match[2] };
+  }
+
+  /**
+   * Parse TTL string like "30d", "90d" into milliseconds.
+   */
+  private parseTTL(ttl: string): number | null {
+    const m = ttl.match(/^(\d+)d$/);
+    if (!m) return null;
+    return parseInt(m[1], 10) * 24 * 60 * 60 * 1000;
+  }
+
+  /**
+   * Check all memory files in MEMORY_BASE_DIR for status lifecycle transitions.
+   *
+   * Lifecycle: draft -> current -> stale -> archive
+   *
+   * Rules:
+   * - TTL expired + status "current" -> mark "stale" (not archive directly)
+   * - TTL expired + status "stale" for > 30 days -> move to archive/
+   * - status "superseded" for > 7 days -> move to archive/
+   * - No status field -> treat as "current" (backward compat)
+   * - Log all transitions to tombstone.md
+   */
+  checkTTLExpiration(): { archived: number; stale: number; checked: number } {
+    const memRoot = MEMORY_BASE_DIR;
+    if (!existsSync(memRoot)) return { archived: 0, stale: 0, checked: 0 };
+
+    const archiveDir = join(memRoot, "archive");
+    if (!existsSync(archiveDir)) mkdirSync(archiveDir, { recursive: true });
+
+    const files = this.walkMdFiles(memRoot);
+    let archived = 0;
+    let stale = 0;
+    let checked = 0;
+    const now = Date.now();
+    const STALE_GRACE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days in stale before archive
+    const SUPERSEDED_GRACE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days after superseded
+
+    for (const filePath of files) {
+      const rel = relative(memRoot, filePath);
+      if (rel.startsWith("archive")) continue;
+
+      checked++;
+      const content = readFileSync(filePath, "utf-8");
+      const { fields, body } = this.parseFrontmatter(content);
+      const docStatus = (fields.status as DocStatus) || "current";
+
+      // Handle superseded documents: archive after grace period
+      if (docStatus === "superseded") {
+        const verifiedDate = fields.verified ? new Date(fields.verified as string).getTime() : 0;
+        if (verifiedDate && now - verifiedDate > SUPERSEDED_GRACE_MS) {
+          this.archiveFile(filePath, memRoot, archiveDir, `superseded, successor: ${fields.superseded_by || "unknown"}`);
+          archived++;
+        }
+        continue;
+      }
+
+      // Already archived status: move physically
+      if (docStatus === "archive") {
+        this.archiveFile(filePath, memRoot, archiveDir, "status set to archive");
+        archived++;
+        continue;
+      }
+
+      // TTL check for current/draft documents
+      if (!fields.ttl || typeof fields.ttl !== "string") continue;
+      if (!fields.created) continue;
+
+      const ttlMs = this.parseTTL(fields.ttl);
+      if (ttlMs === null) continue;
+
+      const createdMs = new Date(fields.created as string).getTime();
+      if (isNaN(createdMs)) continue;
+
+      const age = now - createdMs;
+      if (age <= ttlMs) continue;
+
+      // TTL expired
+      const daysOld = Math.round(age / (24 * 60 * 60 * 1000));
+
+      if (docStatus === "current" || docStatus === "draft") {
+        // First transition: current/draft -> stale (not archive directly)
+        this.setStatus(filePath, content, fields, "stale");
+        stale++;
+        console.log(`[MemoryManager] TTL expired: ${rel} (${daysOld}d old) -> marked stale`);
+      } else if (docStatus === "stale") {
+        // Already stale: check if stale long enough to archive
+        const verifiedDate = fields.verified ? new Date(fields.verified as string).getTime() : createdMs + ttlMs;
+        if (now - verifiedDate > STALE_GRACE_MS) {
+          this.archiveFile(filePath, memRoot, archiveDir, `stale for ${Math.round((now - verifiedDate) / (24*60*60*1000))}d, TTL=${fields.ttl}`);
+          archived++;
+        }
+      }
+    }
+
+    return { archived, stale, checked };
+  }
+
+  /**
+   * Update the status field in a file's frontmatter.
+   */
+  private setStatus(filePath: string, content: string, fields: MemoryFrontmatter, newStatus: DocStatus): void {
+    const today = new Date().toISOString().slice(0, 10);
+    let updated: string;
+
+    if (content.startsWith("---\n")) {
+      // Has frontmatter: update status and verified date
+      if (fields.status) {
+        updated = content.replace(/^(status:\s*).*$/m, `$1${newStatus}`);
+      } else {
+        updated = content.replace(/^---\n/, `---\nstatus: ${newStatus}\n`);
+      }
+      if (fields.verified) {
+        updated = updated.replace(/^(verified:\s*).*$/m, `$1${today}`);
+      } else {
+        updated = updated.replace(/^---\n/, `---\nverified: ${today}\n`);
+      }
+    } else {
+      // No frontmatter: add it
+      updated = `---\nstatus: ${newStatus}\nverified: ${today}\n---\n${content}`;
+    }
+
+    writeFileSync(filePath, updated, "utf-8");
+  }
+
+  /**
+   * Move a file to archive/ and log a tombstone entry.
+   */
+  private archiveFile(filePath: string, memRoot: string, archiveDir: string, reason: string): void {
+    const rel = relative(memRoot, filePath);
+    const archivePath = join(archiveDir, basename(filePath));
+    const finalPath = existsSync(archivePath)
+      ? join(archiveDir, `${basename(filePath, ".md")}-${Date.now()}.md`)
+      : archivePath;
+
+    const content = readFileSync(filePath, "utf-8");
+
+    try {
+      renameSync(filePath, finalPath);
+    } catch {
+      try {
+        writeFileSync(finalPath, content, "utf-8");
+        const { unlinkSync } = require("fs");
+        unlinkSync(filePath);
+      } catch (err) {
+        console.error(`[MemoryManager] Failed to archive ${rel}: ${err}`);
+        return;
+      }
+    }
+
+    // Log tombstone
+    this.logTombstone(memRoot, { file: rel, date: new Date().toISOString().slice(0, 10), reason });
+    console.log(`[MemoryManager] Archived: ${rel} (${reason})`);
+  }
+
+  /**
+   * Append a tombstone entry to tombstone.md in memory root.
+   */
+  private logTombstone(memRoot: string, entry: TombstoneEntry): void {
+    const tombstonePath = join(memRoot, "tombstone.md");
+    const line = `- \`${entry.file}\` — archived ${entry.date}, ${entry.reason}${entry.successor ? `, successor: ${entry.successor}` : ""}\n`;
+
+    if (existsSync(tombstonePath)) {
+      const content = readFileSync(tombstonePath, "utf-8");
+      writeFileSync(tombstonePath, content + line, "utf-8");
+    } else {
+      writeFileSync(tombstonePath, `# Tombstone Log\n\nArchived and deleted memory files.\n\n${line}`, "utf-8");
+    }
+  }
+
+  /**
+   * Get all active (non-expired, non-archived) memories from global memory dir.
+   * Filters by status: returns only draft, current, stale files.
+   * Optionally filter by genre.
+   */
+  getActiveMemories(genreFilter?: DocGenre): Array<{
+    path: string;
+    priority: string;
+    created: string;
+    status: DocStatus;
+    genre: string;
+    verified: string;
+  }> {
+    const memRoot = MEMORY_BASE_DIR;
+    if (!existsSync(memRoot)) return [];
+
+    const files = this.walkMdFiles(memRoot);
+    const result: Array<{
+      path: string;
+      priority: string;
+      created: string;
+      status: DocStatus;
+      genre: string;
+      verified: string;
+    }> = [];
+
+    const ACTIVE_STATUSES: DocStatus[] = ["draft", "current", "stale"];
+
+    for (const filePath of files) {
+      const rel = relative(memRoot, filePath);
+      if (rel.startsWith("archive")) continue;
+
+      const content = readFileSync(filePath, "utf-8");
+      const { fields } = this.parseFrontmatter(content);
+
+      const docStatus = (fields.status as DocStatus) || "current";
+      if (!ACTIVE_STATUSES.includes(docStatus)) continue;
+
+      const genre = (fields.genre as string) || "reference";
+      if (genreFilter && genre !== genreFilter) continue;
+
+      result.push({
+        path: rel,
+        priority: (fields.priority as string) || "medium",
+        created: (fields.created as string) || "unknown",
+        status: docStatus,
+        genre,
+        verified: (fields.verified as string) || "never",
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Walk directory recursively collecting .md files.
+   */
+  private walkMdFiles(dir: string): string[] {
+    const files: string[] = [];
+    if (!existsSync(dir)) return files;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...this.walkMdFiles(full));
+      } else if (entry.name.endsWith(".md")) {
+        files.push(full);
+      }
+    }
+    return files;
+  }
+
+  // ─── STATS ────────────────────────────────────────────────────
 
   /**
    * Get memory stats for a project.

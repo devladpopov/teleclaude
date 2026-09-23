@@ -1,0 +1,10 @@
+{
+  "name": "browser-mcp",
+  "private": true,
+  "type": "module",
+  "description": "Per-topic browser MCP over a shared CDP Chrome (:9222). Each topic gets its own isolated context.",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "playwright-core": "1.63.0"
+  }
+}

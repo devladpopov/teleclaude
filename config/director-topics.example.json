@@ -1,0 +1,5 @@
+{
+  "ignored": ["Flood", "Reminders", "Personal"],
+  "communication": ["Community", "Job search", "LinkedIn"],
+  "operations": ["VPS", "Monitoring", "Router: architecture and fixes"]
+}

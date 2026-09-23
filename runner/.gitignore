@@ -1,0 +1,7 @@
+data/
+node_modules/
+dist/
+.bun
+.bun-build/
+*.log
+scripts/.last-restart

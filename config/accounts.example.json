@@ -1,0 +1,24 @@
+{
+  "active": "main",
+  "accounts": {
+    "main": {
+      "type": "default",
+      "description": "default ~/.claude login"
+    },
+    "oauth-2": {
+      "type": "token",
+      "tokenFile": "C:/path/to/secrets/claude-oauth-2.token",
+      "description": "long-lived OAuth token from `claude setup-token`"
+    },
+    "api": {
+      "type": "apikey",
+      "keyFile": "C:/path/to/secrets/anthropic-api.key",
+      "description": "pay-as-you-go API key"
+    },
+    "isolated": {
+      "type": "configDir",
+      "configDir": "C:/path/to/claude-config-2",
+      "description": "separate CLAUDE_CONFIG_DIR with its own login"
+    }
+  }
+}
