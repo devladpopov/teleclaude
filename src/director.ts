@@ -521,6 +521,12 @@ export interface DirectorConfig {
    */
   getActiveAccountName?: () => string;
   /**
+   * Quota pool a topic spends: the active Claude auth mode for claude
+   * topics, "provider:<id>" for topics on another provider (/provider).
+   * A rate limit pauses only that pool. Default: getActiveAccountName.
+   */
+  getQuotaKey?: (topicKey: string) => string;
+  /**
    * Called when Director picks a topic to trigger. Implementor sends
    * a Telegram notification AND spawns Claude. Returns ok / rateLimited /
    * account / resumeAt so Director can update quota state and the
@@ -1859,20 +1865,27 @@ export class Director {
       if (remaining > 0) {
         const candidates = this.selectTriggerCandidates(states, now, recentFailures);
         const account = this.config.getActiveAccountName?.() ?? "default";
-        // Account already locked? Defer all candidates without spawning.
-        const quota = this.accountQuota.get(account);
-        if (quota && quota.resumeAt > now) {
-          for (const state of candidates.slice(0, remaining)) {
-            this.enqueueDeferred(state, account, "rate_limit", quota.resumeAt);
+        const quotaKey = (s: TopicState) => this.config.getQuotaKey?.(s.topicKey) ?? account;
+        // Quota pool already locked? Defer that topic without spawning;
+        // topics on other pools (another provider) still run.
+        const slice: TopicState[] = [];
+        for (const state of candidates) {
+          if (slice.length >= remaining) break;
+          const key = quotaKey(state);
+          const quota = this.accountQuota.get(key);
+          if (quota && quota.resumeAt > now) {
+            this.enqueueDeferred(state, key, "rate_limit", quota.resumeAt);
+            continue;
           }
-        } else {
-          const slice = candidates.slice(0, remaining);
+          slice.push(state);
+        }
+        if (slice.length > 0) {
           // Push trigger_started events FIRST so the activity log shows
           // them immediately even if spawns take a while.
           this.flushEvents();
           // Fire all in parallel and wait for all to settle.
           const results = await Promise.allSettled(
-            slice.map(state => this.fireTrigger(state, account, now)),
+            slice.map(state => this.fireTrigger(state, quotaKey(state), now)),
           );
           for (const r of results) {
             if (r.status === "fulfilled" && r.value) firedCount++;

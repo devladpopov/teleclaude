@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { createOpencodeParser, buildOpencodeConfig, opencodeExecutor } from "../src/executors/opencode.ts";
+import { createOpencodeParser, buildOpencodeConfig, convertMcpServers, opencodeExecutor } from "../src/executors/opencode.ts";
 import { claudeExecutor } from "../src/executors/claude.ts";
 import { getExecutor, isExecutorId } from "../src/executors/index.ts";
 import { isValidSessionId, parseStreamJsonEvent } from "../src/stream-parser.ts";
@@ -141,6 +141,19 @@ describe("opencode launch", () => {
     expect(cfg.instructions).toEqual(["C:/jobs/1/system-prompt.md"]);
     expect(cfg.provider.deepseek.options).toEqual({ baseURL: "https://api.deepseek.com/v1", apiKey: "{env:DEEPSEEK_API_KEY}" });
     expect(l.env!.OPENCODE_CONFIG_CONTENT).not.toContain("sk-secret");
+  });
+
+  test("claude MCP config becomes opencode mcp", () => {
+    const servers = convertMcpServers({
+      "router-mcp": { command: "bun", args: ["run", "mcp-router/server.ts"], env: { A: "1" } },
+      playwright: { type: "http", url: "http://127.0.0.1:8931/mcp" },
+      off: { command: "x", disabled: true },
+      broken: { foo: 1 },
+    });
+    expect(servers).toEqual({
+      "router-mcp": { type: "local", command: ["bun", "run", "mcp-router/server.ts"], enabled: true, environment: { A: "1" } },
+      playwright: { type: "remote", url: "http://127.0.0.1:8931/mcp", enabled: true },
+    });
   });
 
   test("no config when nothing to configure", () => {

@@ -317,6 +317,8 @@ export class RunnerClient {
         npm: provider.npm,
       },
       appendSystemPrompt: safePrompt,
+      // runner converts this claude-format file into opencode "mcp"
+      mcpConfigPath,
       env: buildProviderEnv(cleanEnv, provider, resolved!.key),
       claudePath: "",
       idleTimeoutMinutes: this.settings.processes.idleTimeoutMinutes ?? 5,

@@ -68,8 +68,10 @@ describe("keys", () => {
     const env = buildProviderEnv({
       PATH: "/bin", TOPIC_CHAT_ID: "-100", TELEGRAM_BOT_TOKEN: "t", ROUTER_WEBHOOK_SECRET: "s",
       CLAUDE_CODE_OAUTH_TOKEN: "o", ANTHROPIC_API_KEY: "a", GEMINI_API_KEY: "g", QWEN_API_KEY: "q",
+      ROUTER_INTERNAL_SECRET: "i",
     }, deepseek, "sk-1");
-    expect(env).toEqual({ PATH: "/bin", TOPIC_CHAT_ID: "-100", DEEPSEEK_API_KEY: "sk-1" });
+    // ROUTER_INTERNAL_SECRET stays: router-mcp needs it for trigger_topic
+    expect(env).toEqual({ PATH: "/bin", TOPIC_CHAT_ID: "-100", ROUTER_INTERNAL_SECRET: "i", DEEPSEEK_API_KEY: "sk-1" });
   });
 });
 

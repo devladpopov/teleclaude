@@ -599,6 +599,7 @@ export class Router {
         (process.env.DIRECTOR_ALLOWED_CHATS?.split(",").map(s => s.trim()).filter(Boolean))
         ?? [],
       getActiveAccountName: () => this.accountManager.getActiveName(),
+      getQuotaKey: (topicKey: string) => this.quotaKeyFor(topicKey),
       getLastBotMsgId: (topicKey: string) => this.lastBotMsgId.get(topicKey),
       onStaleTopic: async (topicKey, state, options) => {
         // Two-step trigger:
@@ -611,7 +612,8 @@ export class Router {
         const chatId = Number(chatIdStr);
         const threadId = threadIdStr === "general" ? undefined : Number(threadIdStr);
 
-        const account = this.accountManager.getActiveName();
+        // Quota pool: Claude auth mode, or provider:<id> for other providers
+        const account = this.quotaKeyFor(topicKey);
 
         try {
           await this.bot.api.sendMessage(chatId, options.noticeText, {
@@ -2318,6 +2320,12 @@ export class Router {
   private topicProvider(mapping?: TopicMapping): ProviderConfig {
     if (!(this.processManager instanceof RunnerClient)) return CLAUDE_PROVIDER;
     return resolveTopicProvider(mapping);
+  }
+
+  /** Quota pool for Director: Claude auth mode, or "provider:<id>". */
+  private quotaKeyFor(topicKey: string): string {
+    const provider = this.topicProvider(this.topics.topics[topicKey]);
+    return provider.executor === "claude" ? this.accountManager.getActiveName() : `provider:${provider.id}`;
   }
 
   /** Session id to resume for the topic's current executor, if any. */

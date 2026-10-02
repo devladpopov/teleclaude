@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { isValidSessionId, toolDetailFromInput } from "../stream-parser.ts";
 import type { ParsedEvent } from "../stream-parser.ts";
@@ -27,6 +28,43 @@ import type { Executor, ExecutorLaunch, LineParser } from "./types.ts";
 const OPENCODE_SESSION_RE = /^ses_[A-Za-z0-9]{8,64}$/;
 const SYSTEM_PROMPT_FILE = "system-prompt.md";
 
+/**
+ * Claude --mcp-config format -> opencode "mcp" section.
+ *   {command, args, env}        -> {type:"local", command:[...], environment}
+ *   {type:"http"|"sse", url}    -> {type:"remote", url, headers}
+ * Unknown entries are skipped.
+ */
+export function convertMcpServers(servers: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!servers || typeof servers !== "object") return out;
+  for (const [name, s] of Object.entries(servers as Record<string, any>)) {
+    if (!s || typeof s !== "object" || s.disabled === true) continue;
+    if (typeof s.command === "string") {
+      const entry: Record<string, unknown> = {
+        type: "local",
+        command: [s.command, ...(Array.isArray(s.args) ? s.args.map(String) : [])],
+        enabled: true,
+      };
+      if (s.env && typeof s.env === "object") entry.environment = s.env;
+      out[name] = entry;
+    } else if (typeof s.url === "string") {
+      const entry: Record<string, unknown> = { type: "remote", url: s.url, enabled: true };
+      if (s.headers && typeof s.headers === "object") entry.headers = s.headers;
+      out[name] = entry;
+    }
+  }
+  return out;
+}
+
+function readMcpConfig(path: string | undefined): Record<string, unknown> {
+  if (!path || !existsSync(path)) return {};
+  try {
+    return convertMcpServers(JSON.parse(readFileSync(path, "utf-8"))?.mcpServers);
+  } catch {
+    return {};
+  }
+}
+
 export function buildOpencodeConfig(request: JobRequest, jobDir: string): Record<string, unknown> | undefined {
   const config: Record<string, unknown> = {};
 
@@ -50,6 +88,11 @@ export function buildOpencodeConfig(request: JobRequest, jobDir: string): Record
       },
     };
   }
+
+  // Same MCP servers claude gets with --mcp-config (reminders,
+  // trigger_topic, browser): opencode has no such flag, so they go here.
+  const mcp = readMcpConfig(request.mcpConfigPath);
+  if (Object.keys(mcp).length > 0) config.mcp = mcp;
 
   return Object.keys(config).length > 0 ? config : undefined;
 }

@@ -172,6 +172,9 @@ export function clearSession(mapping: TopicMapping, executor: ExecutorId): boole
 // ─── Job env for non-claude executors ───────────────────────────
 
 const SECRET_NAME_RE = /TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE|CREDENTIAL|OAUTH/i;
+// Needed inside the job: router-mcp sends it with trigger_topic to the
+// loopback-only /internal/trigger (claude jobs get it as well).
+const KEEP_IN_JOB = new Set(["ROUTER_INTERNAL_SECRET"]);
 
 /**
  * Env for an opencode job: the router env without secrets (bot token,
@@ -181,7 +184,7 @@ const SECRET_NAME_RE = /TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE|CREDENTIAL
 export function buildProviderEnv(base: Record<string, string>, p: ProviderConfig, key: string | undefined): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) {
-    if (SECRET_NAME_RE.test(k)) continue;
+    if (SECRET_NAME_RE.test(k) && !KEEP_IN_JOB.has(k)) continue;
     env[k] = v;
   }
   if (p.apiKeyEnv && key) env[p.apiKeyEnv] = key;

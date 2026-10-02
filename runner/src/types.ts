@@ -21,6 +21,11 @@ export interface JobRequest {
   /** Binary of a non-claude executor; default is the executor name in PATH. */
   executorPath?: string;
   provider?: ProviderSpec;
+  /**
+   * Claude-format MCP config ({"mcpServers": ...}) for executors that
+   * cannot take --mcp-config; opencode converts it into its own "mcp".
+   */
+  mcpConfigPath?: string;
   projectPath: string;
   message: string;
   sessionId?: string;

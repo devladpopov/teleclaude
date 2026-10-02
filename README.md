@@ -366,8 +366,9 @@ Any other OpenAI-compatible endpoint works the same way. Providers are listed in
 - **Keys.** `keyFile` is a `.env` file with the variable named in `apiKeyEnv`; relative paths are resolved against `TELECLAUDE_HOME` (default `~/.teleclaude`), so keys stay outside the repo. The key is read at spawn time and goes only into that job's environment. The router's own secrets (bot token, webhook secret, Claude credentials, other providers' keys) are removed from the environment of non-Claude jobs, and the runner keeps no environment on disk after the start.
 - **Same memory, same rules.** `VISION.md`, `SOUL.md`, `topic-memory.md` and the checkpoint rules reach OpenCode as an instructions file, next to the project's own `AGENTS.md`. Every reply carries the real provider and model, for example `[deepseek:deepseek-chat]`.
 - **Sessions per executor.** `config/topics.json` keeps the Claude session in `sessionId` and other executors in `sessions`, so you can move a topic to DeepSeek and back and both conversations continue. `/reset` starts fresh for all of them.
-- **Limits.** A 429 or quota error from any provider is handled like a Claude limit: the topic pauses until the window resets. TeleClaude never changes the provider by itself; that is always your `/provider` command.
-- **Requirements.** `opencode` in `PATH` (`npm i -g opencode-ai`) or `processes.opencodePath` in `config/settings.json`, and `runner.enabled: true`: other executors run only through the runner. MCP servers from `spawn-mcp-config.json` (reminders, `trigger_topic`, browser) are not passed to OpenCode yet.
+- **Limits.** A 429 or quota error from any provider is handled like a Claude limit. Director pauses only that provider's topics until the window resets; topics on other providers keep working. TeleClaude never changes the provider by itself; that is always your `/provider` command.
+- **Requirements.** `opencode` in `PATH` (`npm i -g opencode-ai`) or `processes.opencodePath` in `config/settings.json`, and `runner.enabled: true`: other executors run only through the runner.
+- **MCP.** The servers from `spawn-mcp-config.json` (reminders, `trigger_topic`, browser) are converted into OpenCode's `mcp` config for every job, so cross-topic work and reminders behave the same. OpenCode names the tools `<server>_<tool>` (for example `router-mcp_trigger_topic`).
 
 ## Director
 
@@ -481,8 +482,7 @@ What this means in practice:
 
 ## Roadmap
 
-- MCP servers (reminders, `trigger_topic`, browser) for OpenCode topics.
-- Verified agent mode for YandexGPT and GigaChat, with a per-provider pause in Director.
+- Verified agent mode for YandexGPT and GigaChat.
 
 ## License
 

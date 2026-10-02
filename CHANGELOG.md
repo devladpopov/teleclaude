@@ -5,6 +5,30 @@ All notable changes to TeleClaude are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - unreleased (draft)
+
+### Added
+
+- **Providers.** A second executor next to Claude Code: [OpenCode](https://opencode.ai) with any OpenAI-compatible API (DeepSeek, Qwen, others). `config/providers.json` (example in `config/providers.example.json`) lists providers; `/provider [id]` switches a topic, with buttons, without a restart.
+- Runner executors (`runner/src/executors/`): `claude` keeps the exact previous command line; `opencode` runs `opencode run --format json` and converts its events into the Claude stream-json shape, so the router, Director and rate-limit detection see one format.
+- Sessions per executor: `config/topics.json` keeps the Claude session in `sessionId` and others in `sessions`; moving a topic to another provider and back continues both conversations.
+- Memory and rules reach OpenCode as an instructions file; MCP servers from `spawn-mcp-config.json` are converted into OpenCode's `mcp` config.
+- Reply prefix with the real provider and model, for example `[deepseek:deepseek-chat]`.
+- README sections "Your data" and "Providers".
+
+### Changed
+
+- Director pauses per quota pool: the Claude authentication mode, or `provider:<id>` for other providers. A limit on one provider no longer pauses topics on another.
+- `/account` is described as the Claude authentication mode in bot texts and docs. `config/accounts.example.json` shows one API key mode and one personal login.
+- Requirements recommend an Anthropic API key; your own Claude Code login is for personal use (see Terms of use).
+- `runner/src/claude-spawn.ts` is now `runner/src/spawn.ts`.
+
+### Security
+
+- Provider keys are read from `keyFile` (relative to `TELECLAUDE_HOME`, default `~/.teleclaude`) at spawn time and go only into that job's environment; OpenCode gets them as an `{env:NAME}` reference.
+- Jobs on other providers do not receive the router's own secrets (bot token, webhook secret, Claude credentials, other providers' keys).
+- The runner worker deletes `env.json` right after reading it, and job metadata (`meta.json`) no longer stores the job environment.
+
 ## [0.2.0] - 2026-09-23
 
 ### Added
