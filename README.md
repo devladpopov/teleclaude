@@ -15,7 +15,7 @@
 
 TeleClaude turns a Telegram supergroup with topics (forum mode) into a multi-project workspace for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Each topic maps to its own project directory and its own Claude Code session. You write or dictate into a topic, and a `claude -p` process starts in that project with its memory and rules loaded. It works with files, the shell, the browser and MCP servers, then replies in the same topic.
 
-The value stays on your machine: project memory, checkpoints, rules, session history and browser profiles. The model and the subscription are replaceable resources. You can switch the account slot with one command, and work continues from the same `CHECKPOINT.md`.
+You own the data. Project memory, checkpoints, rules, session history and browser profiles are plain files on your disk. The model is a replaceable part: changing the provider or the authentication mode is one setting, and work continues from the same `CHECKPOINT.md`. See [Terms of use](#terms-of-use) for how to authenticate.
 
 ## Contents
 
@@ -32,6 +32,8 @@ The value stays on your machine: project memory, checkpoints, rules, session his
 - [Media: voice, video, photos, documents](#media-voice-video-photos-documents)
 - [Running as Windows services](#running-as-windows-services)
 - [Security](#security)
+- [Terms of use](#terms-of-use)
+- [Roadmap](#roadmap)
 - [License](#license)
 
 ## How it works
@@ -62,7 +64,7 @@ One topic is one isolated session:
 | Runner sidecar | A separate process owns the `claude` spawns, so restarting the router does not kill running jobs |
 | Director | Periodic scan of every topic's `CHECKPOINT.md`, registry and dashboard JSON, auto-trigger of stale topics with cooldowns, plan-execute-verify mode, dependencies, morning summary |
 | Cross-topic delegation | `trigger_topic` MCP tool: an agent in one topic can hand work to another topic |
-| Accounts | `/account` slots: `default`, OAuth `token`, `configDir`, `apikey`. Switch without a restart |
+| Authentication | `/account` modes: `apikey` (recommended), or your own Claude Code login (`default`, `token`, `configDir`). Change provider or auth mode without a restart |
 | Models | `/model` and `/effort` per topic; every reply carries a model tag such as `[opus-5.5]` |
 | Scheduling | `/loop` recurring tasks, `/remind` reminders, `reminder-mcp` so the agent can schedule its own follow-ups |
 | Browser pool | Per-topic browser context via a broker, plus dedicated Chrome profiles for selected topics |
@@ -112,7 +114,7 @@ If `runner.enabled` is `false`, the router spawns `claude` directly. This is sim
 
 - Windows 10/11. The code and scripts are Windows-first: PowerShell helpers, `taskkill`, `curl.exe`, NSSM services, Scheduled Tasks. Other platforms are not tested.
 - [Bun](https://github.com/oven-sh/bun), a recent 1.x release.
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), a recent version with `--effort` support, logged in (OAuth) or configured with an API key.
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), a recent version with `--effort` support, configured with an Anthropic API key (recommended) or signed in with your own Claude account for personal use. See [Terms of use](#terms-of-use).
 - A Telegram bot token from [@BotFather](https://t.me/BotFather) and a supergroup with topics enabled. Add the bot as an administrator.
 - Optional: Node.js (for the browser pool), Chrome, Docker with [whisper-asr-webservice](https://github.com/ahmetoner/whisper-asr-webservice) on `localhost:9000`, ffmpeg in `PATH`.
 
@@ -135,7 +137,7 @@ cd runner && bun install && cd ..
 cp .env.example .env                                   # TELEGRAM_BOT_TOKEN
 cp config/settings.example.json config/settings.json   # allowedUsers, projectsRoot
 cp config/topics.example.json   config/topics.json     # filled in by the bot
-cp config/accounts.example.json config/accounts.json   # optional, account slots
+cp config/accounts.example.json config/accounts.json   # optional, authentication modes
 cp templates/SOUL.example.md        templates/SOUL.md
 cp templates/main-memory.example.md templates/main-memory.md
 ```
@@ -206,16 +208,14 @@ Filled in by the bot. Keys are `chatId:threadId` (`chatId:general` for the Gener
 
 ### config/accounts.json
 
-Account slots for `/account`. The active slot is applied to every new spawn. Running processes finish on the old slot.
+Authentication modes for `/account`. The active mode is applied to every new spawn; running processes finish with the previous one. Use only your own credentials, see [Terms of use](#terms-of-use).
 
 ```json
 {
-  "active": "main",
+  "active": "api",
   "accounts": {
-    "main":   { "type": "default",   "description": "CLI login in ~/.claude" },
-    "team":   { "type": "token",     "tokenFile": "C:/path/to/secrets/team.oauth-token" },
-    "second": { "type": "configDir", "configDir": "C:/path/to/claude-config-second" },
-    "api":    { "type": "apikey",    "keyFile":  "C:/path/to/secrets/anthropic.key" }
+    "api":      { "type": "apikey",  "keyFile": "C:/path/to/secrets/anthropic.key" },
+    "personal": { "type": "default", "description": "my own Claude Code login on this machine" }
   }
 }
 ```
@@ -223,11 +223,11 @@ Account slots for `/account`. The active slot is applied to every new spawn. Run
 | Type | What the router sets for the spawn |
 |------|------------------------------------|
 | `default` | Nothing. The CLI uses its own login |
-| `token` | `CLAUDE_CODE_OAUTH_TOKEN` from `tokenFile` (a long-lived token from `claude setup-token`) |
+| `token` | `CLAUDE_CODE_OAUTH_TOKEN` from `tokenFile`: your own long-lived token from `claude setup-token`, for your personal use only |
 | `configDir` | `CLAUDE_CONFIG_DIR`, a separate CLI config directory with its own credentials |
 | `apikey` | `ANTHROPIC_API_KEY` from `keyFile`. For all other types this variable is removed from the child environment |
 
-Switching is manual: when a slot hits its limit, run `/account <slot>` and continue. The session id lives on disk, not in the account, so the topic keeps its history. The router detects rate-limit replies, and Director pauses auto-triggers for that account until the quota window ends. Automatic slot switching is not implemented.
+The mode exists so you can move between providers and authentication methods, for example from a personal login to an API key, without losing anything: the session id, memory and checkpoints live on disk, so the topic keeps its history. When the provider returns a rate limit, the router detects it and Director pauses auto-triggers until the window resets. There is no switching to other accounts to get around limits, and there will not be.
 
 ### config/director-topics.json (optional)
 
@@ -302,7 +302,7 @@ The router injects `TOPIC_CHAT_ID`, `TOPIC_THREAD_ID` and `REMINDERS_JSON_PATH` 
 | `/status`, `/topics`, `/alive` | Active processes, settings, what the current process is doing |
 | `/model [alias]` | Model for this topic (buttons without an argument, `default` removes the override) |
 | `/effort [low\|medium\|high\|max]` | Thinking effort for this topic (`claude --effort`) |
-| `/account [slot]` | Active account slot |
+| `/account [mode]` | Active authentication mode or provider |
 | `/cancel`, `/kill`, `/killall` | Stop this topic's process, or all of them |
 | `/reset` | Start a new session in this topic. Memory files stay |
 | `/compact`, `/memory` | Force context compaction, show memory stats |
@@ -331,7 +331,7 @@ Guards against runaway loops:
 - a consecutive-trigger cap that resets when a human writes in the topic;
 - a hard blacklist, so the Director topic never triggers itself;
 - a night window (22:00 to 08:00 UK time) for `communication` topics, overridable with `BLOCKED_AT_NIGHT`;
-- per-account quota: after a rate limit, triggers on that account wait until the window resets;
+- rate-limit pause: after a rate-limit reply, auto-triggers wait until the window resets;
 - fast retry (5 minutes) when the runner reports that the last job failed, timed out or went silent.
 
 Checkpoint fields Director understands:
@@ -363,13 +363,14 @@ VERIFY_BEFORE_ACT: git log -1
 - **`trigger_topic(topicKey, text)`** (`mcp-router`) lets an agent start a spawn in another topic. A plain bot message to another topic would be ignored by the `allowedUsers` gate, so the tool calls the router's loopback `/internal/trigger` endpoint. It uses the same path as Director. `current_topic()` returns the caller's own `topicKey`.
 - **`/loop 6h <text>`** stores a recurring task in `config/recurring.json`. Intervals go from `1m` to `30d`. Each run spawns Claude in that topic with the text.
 - **Reminders.** `/remind` and the `reminder-mcp` tools (`schedule_reminder`, `list_reminders`, `cancel_reminder`) write to `config/reminders.json`. The router fires them. A reminder can post a plain message or run Claude in the topic. Reminders created while the router is down fire when it comes back.
+- **Reminders in plain text.** A message that starts with "напомни ..." or "remind me ..." becomes `/remind`. A message that starts with a time phrase ("через 2 часа ...", "в 9 ...", "завтра ...", "in 2h ...") becomes a scheduled Claude run (`/remind --do`): it is not answered now, it runs at that time. Start the message with something else if you want an immediate answer.
 
 ## Browser pool
 
 Without the pool, every topic shares one Chrome and they fight over the active tab. With `browserPool.enabled`, the runner asks the broker (`scripts/browser-pool-broker.ts`, `127.0.0.1:8930`) for a browser for each job and writes a per-topic MCP config, replacing only the `playwright` URL.
 
 - Default: each topic gets its own browser MCP process (`browser-mcp/server.mjs`) with its own isolated context on a shared, logged-in Chrome (CDP), with cookies copied from that profile. Tabs are separated, and logins still work.
-- Dedicated profiles: selected topics can get their own Chrome with a separate `user-data-dir` and CDP port, and no shared cookies. This is useful when accounts must never be linked.
+- Dedicated profiles: selected topics can get their own Chrome with a separate `user-data-dir` and CDP port, and no shared cookies. This keeps the logins of different projects in separate browser profiles.
 - Limits: 16 concurrent topic browsers, 60-minute idle reaper, cleanup of orphaned processes after an unclean exit.
 - Any broker error falls back to the static MCP config, so the pool cannot break normal chat.
 
@@ -406,10 +407,28 @@ TeleClaude gives an AI agent a shell on your machine. Read this section before y
 - **Whitelist.** Only messages from `telegram.allowedUsers` are processed. Messages from other users, and from bots (including TeleClaude itself), are ignored.
 - **`--dangerously-skip-permissions`.** The example settings pass this flag, because nobody is at the terminal to approve tool calls. The agent can then read, write and run anything your Windows user can. Use a dedicated user account or machine, keep backups, and put your rules (what needs explicit confirmation: payments, deletions, publishing) into `SOUL.md` and a global `~/.claude/CLAUDE.md`. Prompt rules reduce risk; they do not remove it. Remove the flag if you want the CLI's own permission checks, but most tool calls will then fail in unattended mode.
 - **Secrets never in the repo.** `.env`, `config/settings.json`, `config/topics.json`, `config/accounts.json`, `config/kb.local.json`, reminders, logs and start scripts with tokens are gitignored. Account tokens and API keys are read from files you point to, and are not stored in `accounts.json`.
-- **Environment hygiene.** `ANTHROPIC_API_KEY` is stripped from the child environment unless the active slot is of type `apikey`.
+- **Environment hygiene.** `ANTHROPIC_API_KEY` is stripped from the child environment unless the active mode is `apikey`.
 - **Local ports.** The router (`7885`) binds to `127.0.0.1` by default (`ROUTER_BIND_HOST`), the runner (`7878`) binds to `127.0.0.1` (`CLAUDE_RUNNER_HOST`), and the browser broker (`8930`) listens on `127.0.0.1` only. The runner accepts jobs without authentication, so keep it on loopback. `/internal/trigger` can start a spawn in any topic, so it accepts only loopback peers, rejects any request that carries `cf-connecting-ip` or `x-forwarded-for` (that is, anything that came through a tunnel or proxy), and, when `ROUTER_INTERNAL_SECRET` is set, requires the matching `x-router-internal-secret` header. As defense in depth, also block inbound connections to these ports in Windows Firewall. In webhook mode, publish only `/webhook` through your tunnel and set `ROUTER_WEBHOOK_SECRET`.
 - **Privacy of optional integrations.** Both are off by default. The knowledge base hook (`config/kb.local.json`) sends the text of every message to the endpoint you configure. The realtime extractor (`GEMINI_API_KEY`) sends message text to the Google Gemini API. Without them, message text leaves your machine only through Telegram itself and through Claude Code.
 - **Director scope.** Auto-triggers are limited to `DIRECTOR_ALLOWED_CHATS` and rate-limited as described above.
+
+## Terms of use
+
+TeleClaude is an independent open-source project. It is not affiliated with, endorsed by or sponsored by Anthropic. It runs the unmodified Claude Code CLI, and every request goes from your machine under your own credentials, so the provider's terms apply to you directly:
+
+- Anthropic: [Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) (Free, Pro, Max), [Commercial Terms](https://www.anthropic.com/legal/commercial-terms) (API, Team, Enterprise), [Usage Policy](https://www.anthropic.com/legal/aup).
+- Any other model provider you connect: its own terms of service.
+
+What this means in practice:
+
+- **Recommended: an API key** from the [Claude Console](https://platform.claude.com/) or a supported cloud provider (`apikey` mode). This is the authentication Anthropic intends for tools and automation built on top of Claude.
+- **Subscription sign-in** (`default`, `token`, `configDir` modes) is only for your own personal use of Claude Code on your own machine, at your own risk. Pro and Max usage limits assume ordinary individual use, and unattended automation such as Director auto-triggers can go beyond that.
+- **One person, own credentials.** Never share, pool, rotate, resell or lend accounts or tokens. If you set up TeleClaude for someone else, they sign in with their own account or their own API key; you never collect or store their credentials.
+- **Limits are respected, not bypassed.** When a provider returns a rate limit, TeleClaude pauses and waits for the window to reset. It does not switch to other accounts to get around limits.
+
+## Roadmap
+
+- A second executor besides Claude Code, so the model provider is fully replaceable: an open CLI agent (for example OpenCode or Qwen Code) with any OpenAI-compatible API, including DeepSeek, Qwen, GigaChat and YandexGPT. Memory, checkpoints and Director stay the same.
 
 ## License
 
