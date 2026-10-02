@@ -3448,7 +3448,7 @@ export class Router {
         `Ты: ${who} (id: ${from?.id ?? "?"}${from?.username ? `, @${from.username}` : ""})`,
         `Чат: ${chat.title || chat.type} (id: ${chat.id})`,
         `Topic key: ${topicKey}${threadId ? ` (thread ${threadId})` : ""}`,
-        `Активный OAuth-слот: ${this.accountManager.getActiveName()}`,
+        `Режим авторизации Claude: ${this.accountManager.getActiveName()}`,
       ];
       await ctx.reply(lines.join("\n"), { message_thread_id: threadId });
       return true;
@@ -4382,11 +4382,11 @@ export class Router {
       return true;
     }
 
-    // /account [name] -- multi-account OAuth switching
-    // Без аргумента: показать текущий активный и список слотов.
+    // /account [mode] -- режим авторизации Claude (accounts.json)
+    // Без аргумента: показать текущий режим и список режимов.
     // С аргументом: переключить активный на указанный (если он есть в accounts.json).
     // Существующие процессы НЕ убиваются: они доработают на том OAuth,
-    // под которым были зарождены. Новые spawn уже пойдут под новым слотом.
+    // под которым были зарождены. Новые spawn пойдут в новом режиме.
     const accountMatch = trimmed.match(/^\/account(?:@\w+)?(?:\s+(\S+))?$/);
     if (accountMatch) {
       const target = accountMatch[1];
@@ -4394,9 +4394,9 @@ export class Router {
         const list = this.accountManager.list();
         const activeName = this.accountManager.getActiveName();
         const lines: string[] = [];
-        lines.push(`Активный аккаунт: ${activeName}`);
+        lines.push(`Режим авторизации Claude: ${activeName}`);
         lines.push(``);
-        lines.push(`Все слоты:`);
+        lines.push(`Режимы:`);
         for (const a of list) {
           const marker = a.active ? `[active] ` : ``;
           const ready = a.ready ? `` : ` (проблема: ${a.problem})`;
@@ -4404,8 +4404,8 @@ export class Router {
           lines.push(`${marker}${a.name} [${a.type}]${desc}${ready}`);
         }
         lines.push(``);
-        lines.push(`Нажми кнопку для переключения.`);
-        lines.push(`Существующие процессы доработают на старом слоте.`);
+        lines.push(`Нажмите кнопку, чтобы сменить режим.`);
+        lines.push(`Идущие задачи доработают в прежнем режиме.`);
 
         // Inline keyboard: по 2 в ряд, активный слот — зелёная кнопка (.success())
         const kb = new InlineKeyboard();
@@ -4425,22 +4425,22 @@ export class Router {
       }
       if (!this.accountManager.has(target)) {
         const names = this.accountManager.listNames().join(", ");
-        await ctx.reply(`Слот "${target}" не найден. Доступные: ${names}`, { message_thread_id: threadId });
+        await ctx.reply(`Режим "${target}" не найден. Доступные: ${names}`, { message_thread_id: threadId });
         return true;
       }
       const prev = this.accountManager.getActiveName();
       if (prev === target) {
-        await ctx.reply(`Активный слот уже "${target}".`, { message_thread_id: threadId });
+        await ctx.reply(`Режим уже "${target}".`, { message_thread_id: threadId });
         return true;
       }
       const ok = this.accountManager.setActive(target);
       if (!ok) {
-        await ctx.reply(`Не получилось переключить слот.`, { message_thread_id: threadId });
+        await ctx.reply(`Не получилось сменить режим.`, { message_thread_id: threadId });
         return true;
       }
       const info = this.accountManager.list().find(x => x.name === target);
       const warn = info && !info.ready ? `\nВнимание: ${info.problem}` : ``;
-      await ctx.reply(`Активный слот: ${prev} → ${target}. Новые spawn пойдут под ним.${warn}`, { message_thread_id: threadId });
+      await ctx.reply(`Режим авторизации: ${prev} → ${target}. Применится к новым задачам.${warn}`, { message_thread_id: threadId });
       return true;
     }
 
@@ -4511,7 +4511,7 @@ export class Router {
       "  /unremind <id> — отменить",
       "",
       "Настройки",
-      "  /account [имя] — активный OAuth-слот (без аргумента — кнопки)",
+      "  /account [режим] — режим авторизации Claude (без аргумента — кнопки)",
       "  /provider [id] — провайдер и исполнитель топика (без аргумента — кнопки)",
       "  /model [alias] — модель Claude (без аргумента — кнопки)",
       "  /effort [level] — thinking effort: low|medium|high|max (без аргумента — кнопки)",
@@ -4561,7 +4561,7 @@ export class Router {
       return [
         "Настройки",
         "",
-        "/account [имя] — активный OAuth-слот",
+        "/account [режим] — режим авторизации Claude",
         "/provider [id] — провайдер топика (config/providers.json)",
         "/model [alias] — модель Claude топика",
         "/effort [level] — thinking effort топика (low|medium|high|max)",
@@ -4586,7 +4586,8 @@ export class Router {
       { command: "status", description: "Активные процессы + настройки" },
       { command: "model", description: "Модель Claude (без arg — кнопки)" },
       { command: "effort", description: "Thinking effort (без arg — кнопки)" },
-      { command: "account", description: "OAuth-слот (без arg — кнопки)" },
+      { command: "account", description: "Режим авторизации Claude" },
+      { command: "provider", description: "Провайдер топика (без arg — кнопки)" },
       { command: "topics", description: "Список живых процессов" },
       { command: "alive", description: "Что делает текущий процесс" },
       { command: "cancel", description: "Отменить процесс топика" },
@@ -4680,7 +4681,7 @@ export class Router {
         if (ns === "account") {
           const target = rest[0];
           if (!target || !this.accountManager.has(target)) {
-            await ctx.answerCallbackQuery({ text: "Слот не найден" });
+            await ctx.answerCallbackQuery({ text: "Режим не найден" });
             return;
           }
           const prev = this.accountManager.getActiveName();
@@ -4692,7 +4693,7 @@ export class Router {
           await ctx.answerCallbackQuery({ text: `Активный: ${target}` });
           try {
             await ctx.editMessageText(
-              `Активный слот: ${prev} → ${target}. ` +
+              `Режим авторизации: ${prev} → ${target}. ` +
               `Новые spawn пойдут под ним.`,
             );
           } catch { /* старое сообщение — пофиг */ }

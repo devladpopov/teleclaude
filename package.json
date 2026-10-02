@@ -1,7 +1,7 @@
 {
   "name": "claude-topic-router",
   "version": "0.1.0",
-  "description": "Telegram topic router for Claude Code — each topic gets its own Claude Code process with isolated memory",
+  "description": "Telegram workspace for AI agents: each topic is a project with its own memory. Claude Code or any OpenAI-compatible model via OpenCode",
   "type": "module",
   "main": "src/index.ts",
   "scripts": {

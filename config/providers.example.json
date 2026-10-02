@@ -1,5 +1,5 @@
 {
-  "_comment": "Providers for the opencode executor. Copy to config/providers.json (re-read on change, no restart). Keys are never stored here: keyFile is a .env file with the variable named in apiKeyEnv, relative paths are resolved against TELECLAUDE_HOME (default ~/.teleclaude), so keys stay outside the repo; the runner passes it only to the job process and references it in the opencode config as {env:NAME}. Switching provider is a manual choice (/provider <id>); TeleClaude never switches providers or accounts on its own to get around limits.",
+  "_comment": "Providers for the opencode executor. Copy to config/providers.json (re-read on change, no restart). Keys are never stored here: keyFile is a .env file with the variable named in apiKeyEnv, relative paths are resolved against TELECLAUDE_HOME (default ~/.teleclaude), so keys stay outside the repo; the runner passes it only to the job process and references it in the opencode config as {env:NAME}. The provider is chosen manually with /provider <id>; a rate limit pauses the topic until the window resets.",
   "default": "claude",
   "providers": [
     {

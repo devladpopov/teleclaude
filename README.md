@@ -1,7 +1,7 @@
 <h1 align="center">TeleClaude</h1>
 
 <p align="center">
-  <strong>A Telegram forum where every topic is its own Claude Code agent.</strong><br>
+  <strong>A Telegram forum where every topic is its own AI agent: Claude Code or any OpenAI-compatible model through OpenCode.</strong><br>
   Isolated sessions, persistent memory, a crash-proof runner and an autonomous Director. Everything runs on your own machine.
 </p>
 
@@ -13,12 +13,13 @@
 
 ---
 
-TeleClaude turns a Telegram supergroup with topics (forum mode) into a multi-project workspace for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Each topic maps to its own project directory and its own Claude Code session. You write or dictate into a topic, and a `claude -p` process starts in that project with its memory and rules loaded. It works with files, the shell, the browser and MCP servers, then replies in the same topic.
+TeleClaude turns a Telegram supergroup with topics (forum mode) into a multi-project workspace for AI agents: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) by default, or any OpenAI-compatible model through [OpenCode](https://opencode.ai) (see [Providers](#providers)). Each topic maps to its own project directory and its own agent session. You write or dictate into a topic, and a `claude -p` process starts in that project with its memory and rules loaded. It works with files, the shell, the browser and MCP servers, then replies in the same topic.
 
 You own the data. Project memory, checkpoints, rules, session history and browser profiles are plain files on your disk. The model is a replaceable part: changing the provider or the authentication mode is one setting, and work continues from the same `CHECKPOINT.md`. See [Terms of use](#terms-of-use) for how to authenticate.
 
 ## Contents
 
+- [Your data](#your-data)
 - [How it works](#how-it-works)
 - [Features](#features)
 - [Architecture](#architecture)
@@ -26,6 +27,7 @@ You own the data. Project memory, checkpoints, rules, session history and browse
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
 - [Bot commands](#bot-commands)
+- [Providers](#providers)
 - [Director](#director)
 - [Cross-topic work, reminders and loops](#cross-topic-work-reminders-and-loops)
 - [Browser pool](#browser-pool)
@@ -35,6 +37,21 @@ You own the data. Project memory, checkpoints, rules, session history and browse
 - [Terms of use](#terms-of-use)
 - [Roadmap](#roadmap)
 - [License](#license)
+
+## Your data
+
+Everything TeleClaude knows lives in plain files on your disk:
+
+| What | Where |
+|------|-------|
+| Project memory and rules | In each project folder: `VISION.md`, `SOUL.md`, `topic-memory.md`, `CHECKPOINT.md`, `CLAUDE.md` / `AGENTS.md` |
+| Shared memory | `main-memory.md` and `TELECLAUDE_MEMORY_DIR` (default `~/.teleclaude/memory`) |
+| Topic map and session ids | `config/topics.json` |
+| Settings, providers, auth modes | `config/*.json`; keys in files you point to (`~/.teleclaude/secrets` by convention) |
+| Session history | Claude Code: `~/.claude/projects`; OpenCode: `~/.local/share/opencode` |
+| Job logs | `runner/data/jobs` |
+
+To back up or move to another machine, copy the projects root, `config/`, `~/.teleclaude` and the two session folders, then install TeleClaude and fix project paths in `config/topics.json` if they changed. There is no single backup command yet.
 
 ## How it works
 
@@ -64,7 +81,8 @@ One topic is one isolated session:
 | Runner sidecar | A separate process owns the `claude` spawns, so restarting the router does not kill running jobs |
 | Director | Periodic scan of every topic's `CHECKPOINT.md`, registry and dashboard JSON, auto-trigger of stale topics with cooldowns, plan-execute-verify mode, dependencies, morning summary |
 | Cross-topic delegation | `trigger_topic` MCP tool: an agent in one topic can hand work to another topic |
-| Authentication | `/account` modes: `apikey` (recommended), or your own Claude Code login (`default`, `token`, `configDir`). Change provider or auth mode without a restart |
+| Providers | Claude Code, or any OpenAI-compatible model (DeepSeek, Qwen and others) through OpenCode; `/provider` per topic, no restart, sessions kept per executor |
+| Authentication | `/account` modes for Claude: `apikey` (recommended), or your own Claude Code login (`default`, `token`, `configDir`) |
 | Models | `/model` and `/effort` per topic; every reply carries a model tag such as `[opus-5.5]` |
 | Scheduling | `/loop` recurring tasks, `/remind` reminders, `reminder-mcp` so the agent can schedule its own follow-ups |
 | Browser pool | Per-topic browser context via a broker, plus dedicated Chrome profiles for selected topics |
@@ -118,7 +136,7 @@ If `runner.enabled` is `false`, the router spawns `claude` directly. This is sim
 - A Telegram bot token from [@BotFather](https://t.me/BotFather) and a supergroup with topics enabled. Add the bot as an administrator.
 - Optional: Node.js (for the browser pool), Chrome, Docker with [whisper-asr-webservice](https://github.com/ahmetoner/whisper-asr-webservice) on `localhost:9000`, ffmpeg in `PATH`.
 
-TeleClaude does not need an Anthropic API key by default. It starts Claude Code with your existing login, the same way you use it in a terminal.
+Recommended: an Anthropic API key (mode `apikey`). Your own Claude Code login also works for personal use, see [Terms of use](#terms-of-use). Other providers need their own API key, see [Providers](#providers).
 
 ## Quick start
 
@@ -227,7 +245,7 @@ Authentication modes for `/account`. The active mode is applied to every new spa
 | `configDir` | `CLAUDE_CONFIG_DIR`, a separate CLI config directory with its own credentials |
 | `apikey` | `ANTHROPIC_API_KEY` from `keyFile`. For all other types this variable is removed from the child environment |
 
-The mode exists so you can move between providers and authentication methods, for example from a personal login to an API key, without losing anything: the session id, memory and checkpoints live on disk, so the topic keeps its history. When the provider returns a rate limit, the router detects it and Director pauses auto-triggers until the window resets. There is no switching to other accounts to get around limits, and there will not be.
+The mode exists so you can move between providers and authentication methods, for example from a personal login to an API key, without losing anything: the session id, memory and checkpoints live on disk, so the topic keeps its history. When the provider returns a rate limit, the router detects it and Director pauses auto-triggers until the window resets. Limits are waited out, never worked around.
 
 ### config/director-topics.json (optional)
 
@@ -302,7 +320,8 @@ The router injects `TOPIC_CHAT_ID`, `TOPIC_THREAD_ID` and `REMINDERS_JSON_PATH` 
 | `/status`, `/topics`, `/alive` | Active processes, settings, what the current process is doing |
 | `/model [alias]` | Model for this topic (buttons without an argument, `default` removes the override) |
 | `/effort [low\|medium\|high\|max]` | Thinking effort for this topic (`claude --effort`) |
-| `/account [mode]` | Active authentication mode or provider |
+| `/provider [id]` | Provider of this topic: Claude or an OpenAI-compatible model through OpenCode (buttons without an argument) |
+| `/account [mode]` | Active Claude authentication mode |
 | `/cancel`, `/kill`, `/killall` | Stop this topic's process, or all of them |
 | `/reset` | Start a new session in this topic. Memory files stay |
 | `/compact`, `/memory` | Force context compaction, show memory stats |
@@ -314,7 +333,41 @@ The router injects `TOPIC_CHAT_ID`, `TOPIC_THREAD_ID` and `REMINDERS_JSON_PATH` 
 | `/name <name>`, `/mode active\|mention-only`, `/ttl [N]` | Rename a topic, set group mode, set TTL |
 | `/rules`, `/project`, `/whoami`, `/uptime`, `/version`, `/runner`, `/logs [N]` | Info and diagnostics |
 
-**Model tag.** The system prompt tells the agent its exact model slug and asks it to start every reply with a tag such as `[opus-5.5]`. Long resumed sessions sometimes lose that rule, so the router adds the tag itself when a reply does not start with `[` (`ensureModelPrefix`). Aliases map to exact slugs in `MODEL_SLUGS` in `src/config.ts`; update that map when a new model is released.
+**Model tag.** The system prompt tells the agent its exact model slug and asks it to start every reply with a tag such as `[opus-5.5]`. Long resumed sessions sometimes lose that rule, so the router adds the tag itself when a reply does not start with `[` (`ensureModelPrefix`). Aliases map to exact slugs in `MODEL_SLUGS` in `src/config.ts`; update that map when a new model is released. On other providers the tag is `[<provider>:<model>]`.
+
+## Providers
+
+A topic runs on one provider at a time. `/provider` shows the current one with buttons, `/provider <id>` switches the topic, `/provider default` returns it to the default. The change applies from the next message; a running job finishes as it started.
+
+| Provider | Executor | How it connects | Status |
+|----------|----------|-----------------|--------|
+| Claude | Claude Code CLI | Anthropic API key (recommended) or your own login, see [Terms of use](#terms-of-use) | Agent: files, shell, browser, MCP |
+| DeepSeek | [OpenCode](https://opencode.ai) | OpenAI-compatible API, `https://api.deepseek.com/v1` | Agent through OpenCode tools |
+| Qwen | OpenCode | Alibaba Cloud Model Studio or Cloud.ru Foundation Models, OpenAI-compatible | Agent through OpenCode tools |
+| YandexGPT | OpenCode | Yandex AI Studio, OpenAI-compatible endpoint; the cloud needs an active billing account | Not verified yet |
+| GigaChat | OpenCode | Only through an OpenAI-compatible proxy (for example gpt2giga): the GigaChat API itself is not OpenAI-compatible | Not verified yet |
+
+Any other OpenAI-compatible endpoint works the same way. Providers are listed in `config/providers.json` (copy `config/providers.example.json`), the file is re-read on change:
+
+```json
+{
+  "default": "claude",
+  "providers": [
+    { "id": "claude", "executor": "claude" },
+    {
+      "id": "deepseek", "executor": "opencode", "name": "DeepSeek",
+      "baseURL": "https://api.deepseek.com/v1", "model": "deepseek-chat",
+      "apiKeyEnv": "DEEPSEEK_API_KEY", "keyFile": "secrets/deepseek.env"
+    }
+  ]
+}
+```
+
+- **Keys.** `keyFile` is a `.env` file with the variable named in `apiKeyEnv`; relative paths are resolved against `TELECLAUDE_HOME` (default `~/.teleclaude`), so keys stay outside the repo. The key is read at spawn time and goes only into that job's environment. The router's own secrets (bot token, webhook secret, Claude credentials, other providers' keys) are removed from the environment of non-Claude jobs, and the runner keeps no environment on disk after the start.
+- **Same memory, same rules.** `VISION.md`, `SOUL.md`, `topic-memory.md` and the checkpoint rules reach OpenCode as an instructions file, next to the project's own `AGENTS.md`. Every reply carries the real provider and model, for example `[deepseek:deepseek-chat]`.
+- **Sessions per executor.** `config/topics.json` keeps the Claude session in `sessionId` and other executors in `sessions`, so you can move a topic to DeepSeek and back and both conversations continue. `/reset` starts fresh for all of them.
+- **Limits.** A 429 or quota error from any provider is handled like a Claude limit: the topic pauses until the window resets. TeleClaude never changes the provider by itself; that is always your `/provider` command.
+- **Requirements.** `opencode` in `PATH` (`npm i -g opencode-ai`) or `processes.opencodePath` in `config/settings.json`, and `runner.enabled: true`: other executors run only through the runner. MCP servers from `spawn-mcp-config.json` (reminders, `trigger_topic`, browser) are not passed to OpenCode yet.
 
 ## Director
 
@@ -414,7 +467,7 @@ TeleClaude gives an AI agent a shell on your machine. Read this section before y
 
 ## Terms of use
 
-TeleClaude is an independent open-source project. It is not affiliated with, endorsed by or sponsored by Anthropic. It runs the unmodified Claude Code CLI, and every request goes from your machine under your own credentials, so the provider's terms apply to you directly:
+TeleClaude is an independent open-source project. It is not affiliated with, endorsed by or sponsored by Anthropic or any other model provider. It runs the unmodified Claude Code or OpenCode CLI, and every request goes from your machine under your own credentials, so the provider's terms apply to you directly:
 
 - Anthropic: [Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) (Free, Pro, Max), [Commercial Terms](https://www.anthropic.com/legal/commercial-terms) (API, Team, Enterprise), [Usage Policy](https://www.anthropic.com/legal/aup).
 - Any other model provider you connect: its own terms of service.
@@ -424,11 +477,12 @@ What this means in practice:
 - **Recommended: an API key** from the [Claude Console](https://platform.claude.com/) or a supported cloud provider (`apikey` mode). This is the authentication Anthropic intends for tools and automation built on top of Claude.
 - **Subscription sign-in** (`default`, `token`, `configDir` modes) is only for your own personal use of Claude Code on your own machine, at your own risk. Pro and Max usage limits assume ordinary individual use, and unattended automation such as Director auto-triggers can go beyond that.
 - **One person, own credentials.** Never share, pool, rotate, resell or lend accounts or tokens. If you set up TeleClaude for someone else, they sign in with their own account or their own API key; you never collect or store their credentials.
-- **Limits are respected, not bypassed.** When a provider returns a rate limit, TeleClaude pauses and waits for the window to reset. It does not switch to other accounts to get around limits.
+- **Limits are respected, not bypassed.** When a provider returns a rate limit, TeleClaude pauses and waits for the window to reset. Changing the provider is always your own decision (`/provider`), never an automatic reaction to a limit.
 
 ## Roadmap
 
-- A second executor besides Claude Code, so the model provider is fully replaceable: an open CLI agent (for example OpenCode or Qwen Code) with any OpenAI-compatible API, including DeepSeek, Qwen, GigaChat and YandexGPT. Memory, checkpoints and Director stay the same.
+- MCP servers (reminders, `trigger_topic`, browser) for OpenCode topics.
+- Verified agent mode for YandexGPT and GigaChat, with a per-provider pause in Director.
 
 ## License
 
