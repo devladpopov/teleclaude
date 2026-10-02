@@ -29,8 +29,12 @@ export class FileTailer {
   private eventHistory: TailerEvent[] = [];
   private static MAX_HISTORY = 5000;
 
-  constructor(jobDir: string) {
+  // Per-job parser: executors other than claude keep state between lines
+  private parse: (line: string) => ParsedEvent | null;
+
+  constructor(jobDir: string, parse: (line: string) => ParsedEvent | null = parseStreamJsonEvent) {
     this.jobDir = jobDir;
+    this.parse = parse;
   }
 
   start(): void {
@@ -124,7 +128,7 @@ export class FileTailer {
   }
 
   private processLine(line: string): void {
-    const parsed = parseStreamJsonEvent(line);
+    const parsed = this.parse(line);
     const event: TailerEvent = {
       lineContent: line,
       parsed,

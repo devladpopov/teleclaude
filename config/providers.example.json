@@ -1,0 +1,58 @@
+{
+  "_comment": "Providers for the opencode executor. Copy to config/providers.json. Keys are never stored here: keyFile is a .env file with the variable named in apiKeyEnv; the runner passes it only to the job process and references it in the opencode config as {env:NAME}. Switching provider is a manual choice (/provider <id>); TeleClaude never switches providers or accounts on its own to get around limits.",
+  "default": "claude",
+  "providers": [
+    {
+      "id": "claude",
+      "executor": "claude",
+      "_comment": "Claude Code CLI, default. Model is set with /model (opus, sonnet, ...)."
+    },
+    {
+      "id": "deepseek",
+      "executor": "opencode",
+      "name": "DeepSeek",
+      "baseURL": "https://api.deepseek.com/v1",
+      "model": "deepseek-chat",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "keyFile": "secrets/deepseek.env"
+    },
+    {
+      "id": "qwen",
+      "executor": "opencode",
+      "name": "Qwen (Alibaba Cloud Model Studio)",
+      "baseURL": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen-plus",
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "keyFile": "secrets/dashscope.env"
+    },
+    {
+      "id": "cloudru",
+      "executor": "opencode",
+      "name": "Cloud.ru Foundation Models (Qwen and others)",
+      "baseURL": "https://foundation-models.api.cloud.ru/v1",
+      "model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+      "apiKeyEnv": "CLOUDRU_API_KEY",
+      "keyFile": "secrets/cloudru.env"
+    },
+    {
+      "id": "yandexgpt",
+      "executor": "opencode",
+      "name": "YandexGPT (Yandex AI Studio)",
+      "_comment": "OpenAI-compatible endpoint. The model id includes your folder id. The cloud must have an active billing account, otherwise every call returns PermissionDenied.",
+      "baseURL": "https://llm.api.cloud.yandex.net/v1",
+      "model": "gpt://<folder_id>/yandexgpt/latest",
+      "apiKeyEnv": "YANDEX_AI_STUDIO_API_KEY",
+      "keyFile": "secrets/yandex-ai-studio.env"
+    },
+    {
+      "id": "gigachat",
+      "executor": "opencode",
+      "name": "GigaChat via an OpenAI-compatible proxy",
+      "_comment": "GigaChat API is not OpenAI-compatible (OAuth token exchange, own request format). Run a local proxy such as gpt2giga and point baseURL to it; the proxy holds the GigaChat credentials.",
+      "baseURL": "http://127.0.0.1:8090/v1",
+      "model": "GigaChat-2-Max",
+      "apiKeyEnv": "GIGACHAT_PROXY_KEY",
+      "keyFile": "secrets/gigachat-proxy.env"
+    }
+  ]
+}

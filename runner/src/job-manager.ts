@@ -10,14 +10,15 @@ import {
 import { join } from "path";
 import { randomUUID } from "crypto";
 import {
-  spawnClaudeDetached,
+  spawnJobDetached,
   getPidFromFile,
   isProcessAlive,
   killProcessTree,
   getExitCode,
   getErrorMessage,
   getChildProcessNames,
-} from "./claude-spawn.ts";
+} from "./spawn.ts";
+import { getExecutor } from "./executors/index.ts";
 import { FileTailer } from "./file-tailer.ts";
 import type { JobRequest, JobMetadata, JobStatus } from "./types.ts";
 
@@ -28,7 +29,7 @@ import type { JobRequest, JobMetadata, JobStatus } from "./types.ts";
  *   meta.json     — serialized JobMetadata
  *   msg.txt       — input message
  *   args.json     — CLI arguments for claude
- *   env.json      — environment variables
+ *   env.json      — environment variables (the worker deletes it right after start)
  *   cwd.txt       — working directory
  *   worker.mjs    — detached worker script
  *   stdout.jsonl  — claude's stream-json output (written by worker)
@@ -91,7 +92,7 @@ export class JobRegistry {
 
         // Restart tailer for running jobs
         if (meta.state === "running") {
-          const tailer = new FileTailer(join(jobsDir, jobId));
+          const tailer = new FileTailer(join(jobsDir, jobId), getExecutor(meta.executor).createParser());
           tailer.start();
           this.tailers.set(jobId, tailer);
           this.log(`Reattached tailer for running job ${jobId} (topic ${meta.topicKey})`);
@@ -110,6 +111,7 @@ export class JobRegistry {
     const meta: JobMetadata = {
       jobId,
       topicKey: request.topicKey,
+      executor: getExecutor(request.executor).id,
       projectPath: request.projectPath,
       claudePath: request.claudePath,
       state: "spawning",
@@ -119,12 +121,13 @@ export class JobRegistry {
       stepCount: 0,
       message: request.message,
       appendSystemPrompt: request.appendSystemPrompt,
-      env: request.env,
+      // request.env is NOT persisted: it carries the router secrets and
+      // provider keys, and meta.json stays on disk after the job.
       flags: request.flags,
     };
 
     try {
-      const result = await spawnClaudeDetached(jobDir, request);
+      const result = await spawnJobDetached(jobDir, request);
       meta.wrapperPid = result.wrapperPid;
       meta.state = "running";
 
@@ -144,7 +147,7 @@ export class JobRegistry {
       }
 
       // Start tailing stdout.jsonl
-      const tailer = new FileTailer(jobDir);
+      const tailer = new FileTailer(jobDir, getExecutor(meta.executor).createParser());
       tailer.start();
       this.tailers.set(jobId, tailer);
     } catch (err) {
@@ -169,6 +172,7 @@ export class JobRegistry {
     return {
       jobId: meta.jobId,
       topicKey: meta.topicKey,
+      executor: meta.executor,
       state: meta.state,
       pid: meta.pid,
       startedAt: meta.startedAt,

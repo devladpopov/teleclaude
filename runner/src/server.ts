@@ -1,5 +1,6 @@
 import { JobRegistry } from "./job-manager.ts";
 import type { JobRequest, JobStatus } from "./types.ts";
+import { isExecutorId } from "./executors/index.ts";
 
 export class RunnerServer {
   private registry: JobRegistry;
@@ -94,8 +95,15 @@ export class RunnerServer {
       return this.json(400, { error: "Invalid JSON" });
     }
 
-    if (!body.topicKey || !body.projectPath || !body.message || !body.claudePath) {
+    if (body.executor !== undefined && !isExecutorId(body.executor)) {
+      return this.json(400, { error: `Unknown executor: ${String(body.executor)}` });
+    }
+    const needsClaudePath = (body.executor ?? "claude") === "claude";
+    if (!body.topicKey || !body.projectPath || !body.message || (needsClaudePath && !body.claudePath)) {
       return this.json(400, { error: "Missing required fields: topicKey, projectPath, message, claudePath" });
+    }
+    if (body.provider && (!body.provider.id || !body.provider.baseURL || !body.provider.model)) {
+      return this.json(400, { error: "provider needs id, baseURL and model" });
     }
 
     const jobId = await this.registry.createJob(body);

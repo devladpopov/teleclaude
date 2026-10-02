@@ -20,6 +20,35 @@ export interface ParsedEvent {
   isResult: boolean;
 }
 
+/**
+ * Session ids differ per executor: claude uses UUIDs, opencode uses
+ * "ses_<base62>". Anything else is rejected so garbage never reaches
+ * --resume / --session.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const OPENCODE_SESSION_RE = /^ses_[A-Za-z0-9]{8,64}$/;
+
+export function isValidSessionId(id: unknown): id is string {
+  return typeof id === "string" && (UUID_RE.test(id) || OPENCODE_SESSION_RE.test(id));
+}
+
+/** Short human-readable detail of a tool call input (first meaningful string). */
+export function toolDetailFromInput(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const obj = input as Record<string, unknown>;
+  let detail = "";
+  for (const k of ["command", "file_path", "filePath", "path", "url", "query", "pattern"]) {
+    if (typeof obj[k] === "string") { detail = obj[k] as string; break; }
+  }
+  if (!detail) {
+    for (const k of Object.keys(obj)) {
+      if (typeof obj[k] === "string") { detail = obj[k] as string; break; }
+    }
+  }
+  if (detail.length > 60) detail = detail.slice(0, 57) + "...";
+  return detail || undefined;
+}
+
 export function parseStreamJsonEvent(jsonLine: string): ParsedEvent | null {
   try {
     const raw = JSON.parse(jsonLine);
@@ -34,8 +63,7 @@ export function parseStreamJsonEvent(jsonLine: string): ParsedEvent | null {
     };
 
     // Session ID — can appear in init, result, or other events
-    if (typeof raw.session_id === "string" &&
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw.session_id)) {
+    if (isValidSessionId(raw.session_id)) {
       parsed.sessionId = raw.session_id;
     }
 
@@ -50,26 +78,7 @@ export function parseStreamJsonEvent(jsonLine: string): ParsedEvent | null {
 
         if (block.type === "tool_use" && typeof block.name === "string") {
           parsed.toolName = block.name;
-          // Extract short detail from input
-          const input = block.input;
-          if (input && typeof input === "object") {
-            let detail = "";
-            if (typeof input.command === "string") detail = input.command;
-            else if (typeof input.file_path === "string") detail = input.file_path;
-            else if (typeof input.path === "string") detail = input.path;
-            else if (typeof input.url === "string") detail = input.url;
-            else if (typeof input.query === "string") detail = input.query;
-            else {
-              for (const k of Object.keys(input)) {
-                if (typeof (input as any)[k] === "string") {
-                  detail = (input as any)[k];
-                  break;
-                }
-              }
-            }
-            if (detail.length > 60) detail = detail.slice(0, 57) + "...";
-            parsed.toolDetail = detail || undefined;
-          }
+          parsed.toolDetail = toolDetailFromInput(block.input);
         }
       }
     }

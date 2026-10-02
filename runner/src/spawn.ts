@@ -8,47 +8,33 @@ import {
 } from "fs";
 import { join } from "path";
 import type { JobRequest } from "./types.ts";
+import { getExecutor } from "./executors/index.ts";
 
 export interface SpawnResult {
   wrapperPid: number;
   claudePidFile: string;
 }
 
-export async function spawnClaudeDetached(
+export async function spawnJobDetached(
   jobDir: string,
   request: JobRequest
 ): Promise<SpawnResult> {
   mkdirSync(jobDir, { recursive: true });
 
-  // Write job configuration to files
-  const args: string[] = [
-    request.claudePath,
-    "-p",
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    "--model",
-    request.model || "opus",
-  ];
-
-  if (request.sessionId) {
-    args.push("--resume", request.sessionId);
+  // Executor decides the command line, extra env and helper files
+  const launch = getExecutor(request.executor).launch(request, jobDir);
+  for (const [name, content] of Object.entries(launch.files || {})) {
+    writeFileSync(join(jobDir, name), content);
   }
 
-  if (request.appendSystemPrompt) {
-    args.push("--append-system-prompt", request.appendSystemPrompt);
-  }
-
-  if (request.flags && request.flags.length > 0) {
-    args.push(...request.flags);
-  }
-
-  args.push("--dangerously-skip-permissions");
-
-  writeFileSync(join(jobDir, "args.json"), JSON.stringify(args));
+  writeFileSync(join(jobDir, "args.json"), JSON.stringify(launch.args));
   writeFileSync(
     join(jobDir, "env.json"),
-    JSON.stringify(request.env || process.env)
+    JSON.stringify({ ...(request.env || process.env), ...(launch.env || {}) })
+  );
+  writeFileSync(
+    join(jobDir, "worker-opts.json"),
+    JSON.stringify({ exitEvent: launch.exitEvent === true })
   );
   writeFileSync(join(jobDir, "cwd.txt"), request.projectPath);
   writeFileSync(join(jobDir, "msg.txt"), request.message);
@@ -74,7 +60,7 @@ export async function spawnClaudeDetached(
 
 function getJobWorkerScript(): string {
   return `import { spawn } from "child_process";
-import { readFileSync, writeFileSync, createWriteStream, createReadStream } from "fs";
+import { readFileSync, writeFileSync, appendFileSync, existsSync, createWriteStream, createReadStream, unlinkSync } from "fs";
 import { join, dirname } from "path";
 
 const jobDir = process.argv[2];
@@ -88,6 +74,11 @@ try {
   const claudePath = args.shift();
   const projectPath = readFileSync(join(jobDir, "cwd.txt"), "utf-8").trim();
   const envData = JSON.parse(readFileSync(join(jobDir, "env.json"), "utf-8"));
+  // env.json holds secrets of the router process and provider keys: it is
+  // needed only here, at start, so it is removed right after reading.
+  try { unlinkSync(join(jobDir, "env.json")); } catch {}
+  const optsFile = join(jobDir, "worker-opts.json");
+  const opts = existsSync(optsFile) ? JSON.parse(readFileSync(optsFile, "utf-8")) : {};
 
   const msgStream = createReadStream(join(jobDir, "msg.txt"));
   const outStream = createWriteStream(join(jobDir, "stdout.jsonl"));
@@ -108,8 +99,25 @@ try {
   proc.stderr.pipe(errStream);
 
   proc.on("close", (code) => {
-    writeFileSync(join(jobDir, "exit-code.txt"), String(code ?? 1));
-    process.exit(code ?? 1);
+    const finish = () => {
+      writeFileSync(join(jobDir, "exit-code.txt"), String(code ?? 1));
+      process.exit(code ?? 1);
+    };
+    if (!opts.exitEvent || code === 0) return finish();
+    // Errors some CLIs print only to stderr become one JSON line in
+    // stdout.jsonl, so the executor parser can report them as a result.
+    let pending = 2;
+    const done = () => {
+      if (--pending > 0) return;
+      let stderr = "";
+      try { stderr = readFileSync(join(jobDir, "stderr.log"), "utf-8").slice(-2000); } catch {}
+      try {
+        appendFileSync(join(jobDir, "stdout.jsonl"), JSON.stringify({ type: "runner_exit", code: code ?? 1, stderr }) + "\\n");
+      } catch {}
+      finish();
+    };
+    outStream.end(done);
+    errStream.end(done);
   });
 
   proc.on("error", (err) => {
