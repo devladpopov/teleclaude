@@ -97,7 +97,7 @@ check("job 2 result", r2.result?.subtype === "success", r2.result?.result);
 
 // 3. Dead session id: router must get "No conversation found"
 const r3 = await runJob("x", { provider: provider(MODEL), sessionId: "ses_doesnotexist1234" });
-check("job 3 session gone", r3.result?.errors?.some((e: string) => e.includes("No conversation found")) === true, r3.result?.result);
+check("job 3 session gone", r3.result?.errors?.some((e: string) => e.includes("No conversation found")) === true && r3.result?.result === undefined, r3.result?.errors?.[0]);
 
 // 4. Rate limit (optional)
 if (MODEL_429) {

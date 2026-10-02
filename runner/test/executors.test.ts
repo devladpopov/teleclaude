@@ -85,6 +85,9 @@ describe("opencode parser on real fixtures", () => {
     const e = parse(JSON.stringify({ type: "runner_exit", code: 1, stderr: "\x1b[91m\x1b[1mError: \x1b[0mSession not found\n" }))!;
     expect(e.isResult).toBe(true);
     expect((e.raw as any).errors[0]).toContain("No conversation found");
+    // no result text: the router must take its "session gone" path
+    expect((e.raw as any).result).toBeUndefined();
+    expect(e.resultText).toBeUndefined();
   });
 
   test("other crash without output becomes an error result", () => {

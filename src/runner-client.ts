@@ -15,6 +15,10 @@ import { fileURLToPath } from "url";
 import { cliModelArg, SPAWN_MCP_CONFIG, type Settings } from "./config";
 import type { AccountManager } from "./account-manager";
 import { resolveTopicMcpConfig } from "./browser-pool-client";
+import { buildProviderEnv, executorOfSession, type ProviderConfig } from "./providers";
+
+/** Provider of a topic for the next spawn; undefined = claude (default path). */
+export type ProviderResolver = (topicKey: string) => { provider: ProviderConfig; key?: string } | undefined;
 
 const RC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -57,6 +61,7 @@ export class RunnerClient {
   private topicQueues = new Map<string, Promise<unknown>>();
   private cachedPort: number | null = null;
   private portFileLastCheck = 0;
+  private providerResolver: ProviderResolver | null = null;
 
   constructor(settings: Settings, accounts?: AccountManager) {
     this.settings = settings;
@@ -87,6 +92,11 @@ export class RunnerClient {
       }
     } catch {}
     return (settings as any).runner?.port || 7878;
+  }
+
+  /** Router tells which provider a topic uses (see providers.ts). */
+  setProviderResolver(resolver: ProviderResolver): void {
+    this.providerResolver = resolver;
   }
 
   setCleanupCallback(callback: (topicKey: string) => void): void {
@@ -281,8 +291,36 @@ export class RunnerClient {
       // оставляем статичный путь
     }
 
+    // Non-claude provider (config/providers.json, /provider): opencode job.
+    // Claude flags (--mcp-config, --effort) and model aliases do not apply;
+    // env without router secrets, plus this provider key only.
+    const resolved = this.providerResolver?.(topicKey);
+    const provider = resolved && resolved.provider.executor !== "claude" ? resolved.provider : undefined;
+    if (provider && provider.apiKeyEnv && !resolved!.key) {
+      throw new Error(`Нет ключа провайдера "${provider.id}": ${provider.apiKeyEnv} не найден ни в keyFile (${provider.keyFile ?? "не задан"}), ни в окружении`);
+    }
+
     // 1. POST /jobs to runner
-    const jobRequest = {
+    const jobRequest = provider ? {
+      topicKey,
+      projectPath,
+      message,
+      sessionId: executorOfSession(resumeId) === provider.executor ? resumeId : undefined,
+      executor: provider.executor,
+      executorPath: this.settings.processes.opencodePath,
+      provider: {
+        id: provider.id,
+        name: provider.name,
+        baseURL: provider.baseURL!,
+        model: provider.model!,
+        apiKeyEnv: provider.apiKeyEnv,
+        npm: provider.npm,
+      },
+      appendSystemPrompt: safePrompt,
+      env: buildProviderEnv(cleanEnv, provider, resolved!.key),
+      claudePath: "",
+      idleTimeoutMinutes: this.settings.processes.idleTimeoutMinutes ?? 5,
+    } : {
       topicKey,
       projectPath,
       message,
@@ -598,7 +636,7 @@ export class RunnerClient {
     let progressToolDetail: string | undefined;
 
     // Session ID
-    if (typeof event.session_id === "string" && /^[0-9a-f-]{16,}$/i.test(event.session_id)) {
+    if (typeof event.session_id === "string" && executorOfSession(event.session_id)) {
       onSessionId?.(event.session_id);
     }
 
@@ -667,7 +705,7 @@ export class RunnerClient {
   }
 }
 
+/** claude UUID or opencode ses_*; the runner re-checks per executor. */
 function isResumableSessionId(id: string | undefined): id is string {
-  if (!id) return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  return executorOfSession(id) !== undefined;
 }

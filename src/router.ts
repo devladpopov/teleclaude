@@ -6,8 +6,13 @@ import { resolve, join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
 import { type Settings, loadTopics, saveTopics, type TopicsConfig, type TopicMapping, type GroupMode, MODEL_ALIASES, isValidModelAlias, MODEL_SLUGS, LEGACY_MODEL_SLUGS, shortModelTag, MEMORY_BASE_DIR, EFFORT_LEVELS, isValidEffortLevel } from "./config";
-import { ProcessManager, isResumableSessionId } from "./process-manager";
+import { ProcessManager } from "./process-manager";
 import { RunnerClient } from "./runner-client";
+import {
+  CLAUDE_PROVIDER, loadProviders, getProvider, resolveTopicProvider, readProviderKey,
+  providerTag, executorOfSession, sessionFor, storeSession, clearSession, PROVIDERS_PATH,
+  type ProviderConfig,
+} from "./providers";
 import { AccountManager } from "./account-manager";
 import { ProjectFactory } from "./project-factory";
 import { WhisperClient, formatWhisperFailure, type WhisperResult } from "./whisper";
@@ -399,7 +404,13 @@ export class Router {
     this.topics = loadTopics();
     this.accountManager = new AccountManager();
     if (settings.runner?.enabled) {
-      this.processManager = new RunnerClient(settings, this.accountManager);
+      const rc = new RunnerClient(settings, this.accountManager);
+      rc.setProviderResolver((topicKey) => {
+        const provider = this.topicProvider(this.topics.topics[topicKey]);
+        if (provider.executor === "claude") return undefined;
+        return { provider, key: readProviderKey(provider) };
+      });
+      this.processManager = rc;
       console.log("[Router] Using RunnerClient (sidecar mode)");
     } else {
       this.processManager = new ProcessManager(settings, this.accountManager);
@@ -1811,14 +1822,14 @@ export class Router {
     // Передаём память через --append-system-prompt НА КАЖДОМ вызове,
     // потому что claude не сохраняет --append-system-prompt при --resume.
     // Это решает проблему «бот забывает контекст после рестарта/TTL».
-    const systemPromptFragment = this.buildSystemPromptFragment(mapping.project, mapping.name, mapping.model, mapping.contextFiles);
+    const systemPromptFragment = this.buildSystemPromptFragment(mapping.project, mapping.name, mapping.model, mapping.contextFiles, this.topicProvider(mapping));
 
     // --- Inject recent message history for new sessions ---
     // При --resume Claude уже видит историю из сессии. При новой сессии
     // (TTL истёк, роутер перезапущен) — инжектим последние N сообщений,
     // чтобы не начинать с чистого листа.
-    const currentSessionId = this.processManager.getSessionId(topicKey);
-    const isNewSession = !currentSessionId && !isResumableSessionId(mapping.sessionId);
+    // Session of the topic's current executor (claude UUID or opencode ses_*)
+    const isNewSession = !this.topicSessionId(topicKey, mapping);
     const historyPreamble = isNewSession ? this.buildHistoryPreamble(topicKey) : "";
     if (historyPreamble) {
       console.log(`[Router] Injecting history for new session in ${topicKey} (${this.recentMsgs.get(topicKey)?.length ?? 0} msgs)`);
@@ -1833,7 +1844,7 @@ export class Router {
     }
 
     // Send to Claude Code with streaming
-    const sessionId = this.processManager.getSessionId(topicKey) || mapping.sessionId;
+    const sessionId = this.topicSessionId(topicKey, mapping);
     const chatIdNum = msg.chat.id;
 
     // Typing уже зарегистрирован через TypingCoordinator выше —
@@ -1932,7 +1943,7 @@ export class Router {
       lastSentBlock = t;
       sendChain = sendChain.then(async () => {
         try {
-          const lastId = await this.sendLongMessage(ctx, this.ensureModelPrefix(t, mapping.model), threadId);
+          const lastId = await this.sendLongMessage(ctx, this.ensureModelPrefix(t, mapping.model, mapping), threadId);
           if (lastId) this.lastBotMsgId.set(topicKey, lastId);
         } catch (e) {
           console.error(`[Router] per-block send failed for ${topicKey}: ${(e as Error).message}`);
@@ -1968,9 +1979,8 @@ export class Router {
           const errMsg = (err as Error).message || "";
           if (errMsg.includes("session gone") && recoveryAttempt === 0) {
             recoveryAttempt++;
-            console.warn(`[Router] session-gone recovery for ${topicKey}: clearing mapping.sessionId and retrying without --resume`);
-            if (mapping.sessionId) {
-              delete (mapping as any).sessionId;
+            console.warn(`[Router] session-gone recovery for ${topicKey}: clearing the session and retrying without --resume`);
+            if (clearSession(mapping, this.topicProvider(mapping).executor)) {
               this.topics.topics[topicKey] = mapping;
               saveTopics(this.topics);
             }
@@ -1992,10 +2002,9 @@ export class Router {
       await ctx.api.deleteMessage(chatIdNum, statusMsg.message_id);
     } catch {}
 
-    // Update session ID
+    // Update session ID (stored per executor: claude / opencode)
     const newSessionId = this.processManager.getSessionId(topicKey);
-    if (newSessionId && newSessionId !== mapping.sessionId) {
-      mapping.sessionId = newSessionId;
+    if (storeSession(mapping, newSessionId)) {
       this.topics.topics[topicKey] = mapping;
       saveTopics(this.topics);
     }
@@ -2010,7 +2019,7 @@ export class Router {
     // send, to avoid duplicating the model's already-shipped tail.
     if (blocksSent === 0) {
       if (response) {
-        const lastId = await this.sendLongMessage(ctx, this.ensureModelPrefix(response, mapping.model), threadId);
+        const lastId = await this.sendLongMessage(ctx, this.ensureModelPrefix(response, mapping.model, mapping), threadId);
         if (lastId) this.lastBotMsgId.set(topicKey, lastId);
       } else {
         await ctx.reply("Claude не вернул ответ.", { message_thread_id: threadId });
@@ -2280,7 +2289,9 @@ export class Router {
    * Короткий тег модели для префикса сообщений ("opus-5.5"), по тем же
    * правилам, что и в system prompt (override топика -> default settings).
    */
-  private modelTagFor(model?: string): string {
+  private modelTagFor(model?: string, mapping?: TopicMapping): string {
+    const provider = this.topicProvider(mapping);
+    if (provider.executor !== "claude") return providerTag(provider);
     const alias = model || this.settings.processes.defaultModel;
     const slug = (MODEL_SLUGS as Record<string, string>)[alias]
       || LEGACY_MODEL_SLUGS[alias]
@@ -2293,13 +2304,84 @@ export class Router {
    * модель в длинных resumed-сессиях теряет правило "[tag] в начале",
    * поэтому если текст не начинается с "[", подставляем тег сами.
    */
-  private ensureModelPrefix(text: string, model?: string): string {
+  private ensureModelPrefix(text: string, model?: string, mapping?: TopicMapping): string {
     const t = text.trimStart();
     if (t.startsWith('[')) return text;
-    return `[${this.modelTagFor(model)}] ${text}`;
+    return `[${this.modelTagFor(model, mapping)}] ${text}`;
   }
 
-  private buildSystemPromptFragment(projectPath: string, projectName: string, model?: string, contextFiles?: string[]): string {
+  /**
+   * Provider of a topic (config/providers.json + /provider). Non-claude
+   * executors run only through the runner sidecar; with direct spawn
+   * (runner.enabled=false) every topic stays on claude.
+   */
+  private topicProvider(mapping?: TopicMapping): ProviderConfig {
+    if (!(this.processManager instanceof RunnerClient)) return CLAUDE_PROVIDER;
+    return resolveTopicProvider(mapping);
+  }
+
+  /** Session id to resume for the topic's current executor, if any. */
+  private topicSessionId(topicKey: string, mapping: TopicMapping): string | undefined {
+    const executor = this.topicProvider(mapping).executor;
+    const cached = this.processManager.getSessionId(topicKey);
+    if (cached && executorOfSession(cached) === executor) return cached;
+    return sessionFor(mapping, executor);
+  }
+
+  /** Text and buttons for /provider without an argument. */
+  private providerMenu(topicKey: string): { text: string; kb: InlineKeyboard } {
+    const mapping = this.topics.topics[topicKey];
+    const file = loadProviders();
+    const current = this.topicProvider(mapping);
+    const lines: string[] = [];
+    lines.push(`Провайдер: ${current.id} (${current.name || current.executor}${current.model ? ", " + current.model : ""})`);
+    lines.push(mapping?.provider ? "Источник: override топика" : `Источник: default (${file.default || "claude"})`);
+    lines.push("");
+    if (file.providers.length <= 1) {
+      lines.push(`Других провайдеров нет. Добавьте их в ${PROVIDERS_PATH} (пример: config/providers.example.json).`);
+    } else {
+      lines.push("Нажмите кнопку или напишите /provider <id>. Применится со следующего сообщения.");
+      lines.push("Сессии хранятся отдельно для каждого исполнителя, при возврате диалог продолжится.");
+    }
+    const kb = new InlineKeyboard();
+    let n = 0;
+    for (const p of file.providers) {
+      if (n > 0 && n % 3 === 0) kb.row();
+      kb.text(p.id, `provider:${p.id}`);
+      if (p.id === current.id) kb.primary();
+      n++;
+    }
+    return { text: lines.join("\n"), kb };
+  }
+
+  /** Switch the provider of a topic. Returns the reply text. */
+  private applyProvider(topicKey: string, id: string): string {
+    const mapping = this.topics.topics[topicKey];
+    if (!mapping) return "Топик не инициализирован: сначала напишите любое сообщение.";
+    const file = loadProviders();
+    const target = id === "default" ? getProvider(file.default, file) ?? CLAUDE_PROVIDER : getProvider(id, file);
+    if (!target) {
+      return `Неизвестный провайдер "${id}". Доступно: ${file.providers.map((p) => p.id).join(", ")}, default.`;
+    }
+    if (target.executor !== "claude" && !(this.processManager instanceof RunnerClient)) {
+      return "Провайдеры кроме claude работают только через runner (settings.runner.enabled = true).";
+    }
+    const prev = this.topicProvider(mapping).id;
+    if (id === "default") delete mapping.provider;
+    else mapping.provider = target.id;
+    this.topics.topics[topicKey] = mapping;
+    saveTopics(this.topics);
+    const lines = [`Провайдер топика: ${prev} → ${target.id}${id === "default" ? " (default)" : ""}. Применится со следующего сообщения.`];
+    if (target.executor !== "claude" && target.apiKeyEnv && !readProviderKey(target)) {
+      lines.push(`Внимание: ключ ${target.apiKeyEnv} не найден (keyFile: ${target.keyFile ?? "не задан"}). Без него задача не запустится.`);
+    }
+    if (target.executor !== "claude") {
+      lines.push("Лимиты провайдера: при 429 топик встаёт на паузу, автоматического переключения нет.");
+    }
+    return lines.join("\n");
+  }
+
+  private buildSystemPromptFragment(projectPath: string, projectName: string, model?: string, contextFiles?: string[], provider: ProviderConfig = CLAUDE_PROVIDER): string {
     const parts: string[] = [];
     parts.push(`Ты работаешь внутри TeleClaude, в проекте «${projectName}».`);
     parts.push(`Корень проекта: ${projectPath}`);
@@ -2318,11 +2400,20 @@ export class Router {
     const slug = (MODEL_SLUGS as Record<string, string>)[effectiveAlias]
       || LEGACY_MODEL_SLUGS[effectiveAlias]
       || effectiveAlias;
-    const shortTag = shortModelTag(slug);
-    parts.push(
-      `Твоя точная модель: ${slug} (alias "${effectiveAlias}", источник: ${modelSource}). ` +
-      `Переключение — команда /model в топике.`
-    );
+    let shortTag = shortModelTag(slug);
+    if (provider.executor !== "claude") {
+      // Другой исполнитель (OpenCode) и провайдер: модель берётся из providers.json
+      shortTag = providerTag(provider);
+      parts.push(
+        `Твоя точная модель: ${provider.model} у провайдера ${provider.name || provider.id} ` +
+        `(исполнитель ${provider.executor}). Смена провайдера: /provider в топике.`
+      );
+    } else {
+      parts.push(
+        `Твоя точная модель: ${slug} (alias "${effectiveAlias}", источник: ${modelSource}). ` +
+        `Переключение — команда /model в топике.`
+      );
+    }
     parts.push(
       `ОБЯЗАТЕЛЬНО: начинай каждое своё сообщение пользователю с префикса [${shortTag}] ` +
       `в квадратных скобках. Не полагайся на свою внутреннюю память о версиях — ` +
@@ -2798,7 +2889,7 @@ export class Router {
     const effectiveModel = modelOverride ?? mapping.model;
 
     const systemPromptFragment = this.buildSystemPromptFragment(
-      mapping.project, mapping.name, effectiveModel, mapping.contextFiles,
+      mapping.project, mapping.name, effectiveModel, mapping.contextFiles, this.topicProvider(mapping),
     );
 
     const compactionPrompt = this.compactor.trackMessage(topicKey, userMessage.length);
@@ -2827,7 +2918,7 @@ export class Router {
     // (Telegram гасит его через ~5 сек), нам только start/stop.
     this.typingCoordinator.start(chatId, threadId);
 
-    const sessionId = this.processManager.getSessionId(topicKey) || mapping.sessionId;
+    const sessionId = this.topicSessionId(topicKey, mapping);
 
     // Per-block TG streaming for auto-trigger path. Uses
     // sendLongMessageRaw (no ctx) and the same promise-chain order
@@ -2842,7 +2933,7 @@ export class Router {
       lastSentBlock = t;
       sendChain = sendChain.then(async () => {
         try {
-          const lastId = await this.sendLongMessageRaw(chatId, threadId, this.ensureModelPrefix(t, effectiveModel));
+          const lastId = await this.sendLongMessageRaw(chatId, threadId, this.ensureModelPrefix(t, effectiveModel, mapping));
           if (lastId) this.lastBotMsgId.set(topicKey, lastId);
         } catch (e) {
           console.error(`[Router] auto per-block send failed for ${topicKey}: ${(e as Error).message}`);
@@ -2878,9 +2969,8 @@ export class Router {
           const errMsg = (err as Error).message || "";
           if (errMsg.includes("session gone") && recoveryAttempt === 0) {
             recoveryAttempt++;
-            console.warn(`[Router] auto session-gone recovery for ${topicKey}: clearing mapping.sessionId and retrying without --resume`);
-            if (mapping.sessionId) {
-              delete (mapping as any).sessionId;
+            console.warn(`[Router] auto session-gone recovery for ${topicKey}: clearing the session and retrying without --resume`);
+            if (clearSession(mapping, this.topicProvider(mapping).executor)) {
               this.topics.topics[topicKey] = mapping;
               saveTopics(this.topics);
             }
@@ -2903,8 +2993,7 @@ export class Router {
 
     // Update session ID (same as handleMessage)
     const newSessionId = this.processManager.getSessionId(topicKey);
-    if (newSessionId && newSessionId !== mapping.sessionId) {
-      mapping.sessionId = newSessionId;
+    if (storeSession(mapping, newSessionId)) {
       this.topics.topics[topicKey] = mapping;
       saveTopics(this.topics);
     }
@@ -2928,7 +3017,7 @@ export class Router {
 
     if (blocksSent === 0 && response && response.trim()) {
       try {
-        const lastId = await this.sendLongMessageRaw(chatId, threadId, this.ensureModelPrefix(response, effectiveModel));
+        const lastId = await this.sendLongMessageRaw(chatId, threadId, this.ensureModelPrefix(response, effectiveModel, mapping));
         if (lastId) this.lastBotMsgId.set(topicKey, lastId);
       } catch (err) {
         console.warn(`[Router] auto-trigger sendLongMessageRaw failed: ${(err as Error).message}`);
@@ -3378,6 +3467,8 @@ export class Router {
         `Создан: ${mapping.created}`,
       ];
       if (mapping.sessionId) lines.push(`Session: ${mapping.sessionId}`);
+      for (const [ex, sid] of Object.entries(mapping.sessions || {})) lines.push(`Session (${ex}): ${sid}`);
+      if (mapping.provider) lines.push(`Провайдер (override): ${mapping.provider}`);
       if (mapping.model) lines.push(`Модель (override): ${mapping.model}`);
       if (mapping.effort) lines.push(`Effort (override): ${mapping.effort}`);
       await ctx.reply(lines.join("\n"), { message_thread_id: threadId });
@@ -3549,8 +3640,8 @@ export class Router {
 
       this.typingCoordinator.start(ctx.message!.chat.id, threadId);
 
-      const sessionId = this.processManager.getSessionId(topicKey) || mapping.sessionId;
-      const sysPrompt = this.buildSystemPromptFragment(mapping.project, mapping.name, mapping.model);
+      const sessionId = this.topicSessionId(topicKey, mapping);
+      const sysPrompt = this.buildSystemPromptFragment(mapping.project, mapping.name, mapping.model, undefined, this.topicProvider(mapping));
       let response: string;
       try {
         response = await this.processManager.sendMessage(
@@ -3580,6 +3671,7 @@ export class Router {
       // Clear session ID so next message starts a new session
       if (this.topics.topics[topicKey]) {
         delete this.topics.topics[topicKey].sessionId;
+        delete this.topics.topics[topicKey].sessions;
         saveTopics(this.topics);
       }
 
@@ -4082,6 +4174,21 @@ export class Router {
       return true;
     }
 
+    // /provider [id] — показать или сменить провайдера топика (config/providers.json).
+    // Без аргумента: текущий провайдер + кнопки. "default" снимает override.
+    // Применяется со следующего spawn; идущая задача доработает как была.
+    const providerMatch = trimmed.match(/^\/provider(?:@\w+)?(?:\s+(\S+))?$/);
+    if (providerMatch) {
+      const arg = providerMatch[1];
+      if (!arg) {
+        const { text, kb } = this.providerMenu(topicKey);
+        await ctx.reply(text, { message_thread_id: threadId, reply_markup: kb } as any);
+        return true;
+      }
+      await ctx.reply(this.applyProvider(topicKey, arg), { message_thread_id: threadId });
+      return true;
+    }
+
     // /model [alias] — показать или сменить Claude-модель для текущего топика.
     // Без аргумента: показать текущую эффективную модель и откуда она взята
     // (override в topics.json vs default из settings).
@@ -4103,6 +4210,10 @@ export class Router {
         const source = override ? "override топика" : "default из settings";
         const lines: string[] = [];
         lines.push(`Модель: ${effective} (${source})`);
+        const prov = this.topicProvider(mapping);
+        if (prov.executor !== "claude") {
+          lines.push(`Сейчас топик на провайдере ${prov.id} (${prov.model}); /model действует на Claude и применится после /provider claude.`);
+        }
         lines.push(``);
         lines.push(`Нажми кнопку или напиши /model <alias>.`);
         lines.push(`Применится со следующего сообщения.`);
@@ -4401,6 +4512,7 @@ export class Router {
       "",
       "Настройки",
       "  /account [имя] — активный OAuth-слот (без аргумента — кнопки)",
+      "  /provider [id] — провайдер и исполнитель топика (без аргумента — кнопки)",
       "  /model [alias] — модель Claude (без аргумента — кнопки)",
       "  /effort [level] — thinking effort: low|medium|high|max (без аргумента — кнопки)",
       "  /ttl [N] — TTL в минутах (без аргумента — кнопки)",
@@ -4450,6 +4562,7 @@ export class Router {
         "Настройки",
         "",
         "/account [имя] — активный OAuth-слот",
+        "/provider [id] — провайдер топика (config/providers.json)",
         "/model [alias] — модель Claude топика",
         "/effort [level] — thinking effort топика (low|medium|high|max)",
         "/ttl [N] — TTL в минутах",
@@ -4583,6 +4696,15 @@ export class Router {
               `Новые spawn пойдут под ним.`,
             );
           } catch { /* старое сообщение — пофиг */ }
+          return;
+        }
+
+        // --- /provider переключение ---
+        if (ns === "provider") {
+          const target = rest.join(":");
+          const text = this.applyProvider(topicKey, target);
+          await ctx.answerCallbackQuery({ text: text.split("\n")[0].slice(0, 190) });
+          try { await ctx.editMessageText(text); } catch { /* старое сообщение */ }
           return;
         }
 

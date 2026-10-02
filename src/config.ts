@@ -13,6 +13,9 @@ export interface Settings {
     ttlMinutes: number;
     maxConcurrent: number;
     claudePath: string;
+    // Binary of the opencode executor (providers with executor "opencode").
+    // Default: "opencode" from PATH.
+    opencodePath?: string;
     defaultFlags: string[];
     defaultModel: string; // "opus" | "sonnet" | "haiku" etc.
     // Idle watchdog: kill process if no stream-json events for N minutes.
@@ -74,7 +77,11 @@ export interface Settings {
 export interface TopicMapping {
   name: string;
   project: string;
-  sessionId?: string;
+  sessionId?: string; // claude session (executor "claude")
+  // Sessions of other executors, e.g. { opencode: "ses_..." }. Kept apart
+  // from sessionId so switching /provider back and forth keeps both.
+  sessions?: Record<string, string>;
+  provider?: string; // override per-topic: id from config/providers.json
   model?: string; // override per-topic: "opus", "sonnet", etc.
   effort?: string; // override per-topic: low|medium|high|max (claude --effort); нет поля = дефолт CLI (high)
   memory: string[];

@@ -1,5 +1,5 @@
 {
-  "_comment": "Providers for the opencode executor. Copy to config/providers.json. Keys are never stored here: keyFile is a .env file with the variable named in apiKeyEnv; the runner passes it only to the job process and references it in the opencode config as {env:NAME}. Switching provider is a manual choice (/provider <id>); TeleClaude never switches providers or accounts on its own to get around limits.",
+  "_comment": "Providers for the opencode executor. Copy to config/providers.json (re-read on change, no restart). Keys are never stored here: keyFile is a .env file with the variable named in apiKeyEnv, relative paths are resolved against TELECLAUDE_HOME (default ~/.teleclaude), so keys stay outside the repo; the runner passes it only to the job process and references it in the opencode config as {env:NAME}. Switching provider is a manual choice (/provider <id>); TeleClaude never switches providers or accounts on its own to get around limits.",
   "default": "claude",
   "providers": [
     {
@@ -41,6 +41,7 @@
       "_comment": "OpenAI-compatible endpoint. The model id includes your folder id. The cloud must have an active billing account, otherwise every call returns PermissionDenied.",
       "baseURL": "https://llm.api.cloud.yandex.net/v1",
       "model": "gpt://<folder_id>/yandexgpt/latest",
+      "tag": "yandexgpt",
       "apiKeyEnv": "YANDEX_AI_STUDIO_API_KEY",
       "keyFile": "secrets/yandex-ai-studio.env"
     },

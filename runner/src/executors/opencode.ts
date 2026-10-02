@@ -115,12 +115,13 @@ export function createOpencodeParser(): LineParser {
     };
   };
 
-  const errorResult = (text: string, errors: string[] = [text]): ParsedEvent => {
+  // withText=false mirrors claude for a dead --resume target: no result
+  // text, only errors, so the router takes its "session gone" path.
+  const errorResult = (text: string, errors: string[] = [text], withText = true): ParsedEvent => {
     resultSent = true;
-    return make(
-      { type: "result", subtype: "error_during_execution", is_error: true, result: text, errors },
-      { resultText: text },
-    );
+    const raw: Record<string, unknown> = { type: "result", subtype: "error_during_execution", is_error: true, errors };
+    if (withText) raw.result = text;
+    return make(raw, withText ? { resultText: text } : {});
   };
 
   return (jsonLine: string): ParsedEvent | null => {
@@ -204,7 +205,7 @@ export function createOpencodeParser(): LineParser {
           return make({ type: "system", subtype: "exit", code: ev.code });
         }
         if (/session not found/i.test(stderr)) {
-          return errorResult(`opencode: ${stderr}`, [`No conversation found (opencode: ${stderr})`]);
+          return errorResult(`opencode: ${stderr}`, [`No conversation found (opencode: ${stderr})`], false);
         }
         return errorResult(`opencode exited with code ${ev.code}${stderr ? `: ${stderr.slice(-500)}` : ""}`);
       }
