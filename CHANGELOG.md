@@ -23,6 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Requirements recommend an Anthropic API key; your own Claude Code login is for personal use (see Terms of use).
 - `runner/src/claude-spawn.ts` is now `runner/src/spawn.ts`.
 
+### Fixed
+
+- Director now pauses a provider when its rate limit comes back as reply text (every OpenCode 429): the router reported such a trigger as a plain success.
+- `--mcp-config` is passed only when the file exists; on a fresh install without `spawn-mcp-config.json` every Claude spawn failed with "Invalid MCP configuration".
+- Runner: a job finishes when the worker has written its exit code, not when the CLI pid disappears; a clean run is no longer recorded as failed in that gap.
+- Runner: a CLI that cannot be started (missing `opencode`, wrong path) fails at once with the spawn error instead of hanging until the idle timeout.
+- Runner: the last lines of a job (result, `runner_exit`) are read before the completion event; Cyrillic characters split between two reads are no longer broken.
+- `/remind`, `/unremind` and `/reminders` re-read `config/reminders.json`, so reminders created by `reminder-mcp` in the meantime are not lost.
+- No "Dashboard uploaded" log line when dashboard sync is off.
+
+### Tests and CI
+
+- `bun test` covers runner executors (command lines, event parsing, 429, errors), the runner job lifecycle with a fake CLI, `config/providers.json` and `/provider`, sessions per (topic, executor), the Director pause per provider, `/loop` and reminders. Telegram and the CLIs are mocked.
+- GitHub Actions: install, typecheck and tests on Ubuntu and Windows.
+
 ### Security
 
 - Provider keys are read from `keyFile` (relative to `TELECLAUDE_HOME`, default `~/.teleclaude`) at spawn time and go only into that job's environment; OpenCode gets them as an `{env:NAME}` reference.
