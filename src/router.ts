@@ -672,6 +672,8 @@ export class Router {
         this.lastTickRegistry = registry;
       },
       onDashboardUpdate: async (_dashboard) => {
+        // Sync off (no DASHBOARD_SYNC_REMOTE): the upload helpers are no-ops.
+        if (dashboardSync.disabled) return;
         // Fail-soft: log and continue. Hosting downtime must not crash the
         // router — next tick will retry, and the local dashboard.json is
         // already authoritative for any future re-deploy.

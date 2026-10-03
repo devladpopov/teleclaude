@@ -2,7 +2,7 @@
  * /loop, /remind and the Director trigger path through the real Router,
  * with Telegram and the runner mocked (see helpers/router-harness.ts).
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
   CHAT_ID, DEEPSEEK, SES, THREAD_ID, TOPIC_KEY, claudeReply, createHarness, opencode429, opencodeReply,
   type Harness,
@@ -205,5 +205,18 @@ describe("Director trigger through the router", () => {
     await director.fireTrigger({ ...state(), category: "work" }, "provider:deepseek", Date.now());
     expect(director.accountQuota.get("provider:deepseek")?.resumeAt).toBeGreaterThan(Date.now());
     expect(director.accountQuota.has(h.router.accountManager.getActiveName())).toBe(false);
+  });
+});
+
+describe("dashboard sync", () => {
+  test("without DASHBOARD_SYNC_REMOTE nothing is uploaded and nothing claims it was", async () => {
+    const logs: string[] = [];
+    const spy = spyOn(console, "log").mockImplementation((...a: unknown[]) => { logs.push(a.join(" ")); });
+    try {
+      await h.router.director.config.onDashboardUpdate({});
+    } finally {
+      spy.mockRestore();
+    }
+    expect(logs.filter((l) => l.includes("Dashboard uploaded"))).toEqual([]);
   });
 });
