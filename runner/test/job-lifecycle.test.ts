@@ -213,3 +213,29 @@ describe("opencode executor through the worker", () => {
     expect(result.resultText).toBe("opencode exited with code 3: provider deepseek: invalid baseURL");
   });
 });
+
+describe("executor binary that cannot be started", () => {
+  test("opencode: failed at once with exit 1, the spawn error reaches the router", async () => {
+    const started = Date.now();
+    const r = await runJob(
+      {
+        executor: "opencode", executorPath: join(tmp, "no-such-opencode"), claudePath: "",
+        provider: { id: "deepseek", baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+      },
+      {},
+      8_000,
+    );
+    expect(r.meta.state).toBe("failed");
+    expect(r.meta.exitCode).toBe(1);
+    expect(Date.now() - started).toBeLessThan(8_000);
+    const result = r.events.find((e) => e.isResult)!;
+    expect(result.resultText).toStartWith("opencode exited with code 1: ");
+    expect(result.resultText).toContain("ENOENT");
+  });
+
+  test("claude: failed with exit 1", async () => {
+    const r = await runJob({ claudePath: join(tmp, "no-such-claude") }, {}, 8_000);
+    expect(r.meta.state).toBe("failed");
+    expect(r.meta.exitCode).toBe(1);
+  });
+});
