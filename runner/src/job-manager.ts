@@ -292,23 +292,29 @@ export class JobRegistry {
   private checkProcesses(): void {
     for (const meta of this.jobs.values()) {
       if (meta.state !== "running") continue;
+      const jobDir = join(this.dataDir, "jobs", meta.jobId);
 
       // Try to read claude.pid if we don't have it yet
       if (!meta.pid) {
-        const jobDir = join(this.dataDir, "jobs", meta.jobId);
         const pid = getPidFromFile(join(jobDir, "claude.pid"));
-        if (pid) {
-          meta.pid = pid;
-        }
-        continue; // Give it a chance to start
+        if (pid) meta.pid = pid;
       }
 
-      if (!isProcessAlive(meta.pid)) {
-        // Process died — check exit code
-        const jobDir = join(this.dataDir, "jobs", meta.jobId);
-        const exitCode = getExitCode(jobDir);
+      // The worker writes exit-code.txt last, after the CLI output and the
+      // runner_exit line are on disk: that is the end of the job.
+      const exitCode = getExitCode(jobDir);
+      if (exitCode !== undefined) {
         this.finishJob(meta.jobId, exitCode === 0 ? "completed" : "failed");
+        continue;
       }
+
+      // No exit code yet: running while the CLI or the worker is alive
+      // (the worker may still be flushing, or the CLI is still starting).
+      if (meta.pid && isProcessAlive(meta.pid)) continue;
+      if (meta.wrapperPid && isProcessAlive(meta.wrapperPid)) continue;
+
+      // Both gone without an exit code: killed or crashed.
+      this.finishJob(meta.jobId, "failed");
     }
   }
 

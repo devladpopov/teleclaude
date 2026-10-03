@@ -1,6 +1,6 @@
 # claude-runner
 
-A sidecar daemon that spawns and manages detached `claude.exe` processes for the claude-topic-router.
+A sidecar daemon that spawns and manages detached agent CLI processes for the claude-topic-router: `claude` (Claude Code, default) or `opencode` (OpenCode with an OpenAI-compatible provider). The executor is chosen per job (`executor` field), see `src/executors/`.
 
 ## Problem
 
@@ -31,11 +31,13 @@ Each job spawns a wrapper process (`bun run.mjs`) which is completely detached a
 
 ```bash
 cd runner
-bun run src/index.ts
+bun --env-file=../.env run src/index.ts
 
 # Or with custom port/concurrency:
 CLAUDE_RUNNER_PORT=8000 CLAUDE_RUNNER_MAX_CONCURRENT=20 bun run src/index.ts
 ```
+
+Bun loads `.env` only from the current folder, so without `--env-file=../.env` the `CLAUDE_RUNNER_*` variables from the repo `.env` are ignored.
 
 ## API
 
@@ -67,6 +69,29 @@ Response: `201 Created`
   "pid": 12345
 }
 ```
+
+An OpenCode job sends `executor` and `provider` instead of the claude fields (`claudePath` may be empty, `flags` and `model` aliases are not used):
+
+```json
+{
+  "topicKey": "123456789:123",
+  "projectPath": "/path/to/project",
+  "message": "user prompt",
+  "executor": "opencode",
+  "executorPath": "opencode",
+  "provider": {
+    "id": "deepseek", "name": "DeepSeek", "baseURL": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat", "apiKeyEnv": "DEEPSEEK_API_KEY"
+  },
+  "sessionId": "ses_...",
+  "appendSystemPrompt": "system prompt text",
+  "mcpConfigPath": "/home/me/.claude/spawn-mcp-config.json",
+  "env": {"DEEPSEEK_API_KEY": "..."},
+  "claudePath": ""
+}
+```
+
+The provider key travels only in `env`; the generated OpenCode config references it as `{env:DEEPSEEK_API_KEY}`. OpenCode events are converted into the same stream-json shape as claude (`system`/`assistant`/`result`), and a CLI error printed only to stderr arrives as an error `result`.
 
 ### GET /jobs/:id
 
@@ -184,7 +209,7 @@ Response: `200 OK`
 4. FileTailer polls stdout.jsonl and emits events to SSE subscribers
 5. SessionID, tool name, step count extracted and tracked
 6. If no new events for `idleTimeoutMinutes`, job is killed
-7. When claude.exe exits, completion event is emitted
+7. When the worker has written `exit-code.txt` (after the CLI exited and its output is on disk), or when both the CLI and the worker are gone, the completion event is emitted. A CLI that cannot be started (missing binary) fails at once with exit code 1
 8. Job state is persisted to `data/jobs/<jobId>/meta.json`
 
 ## On Runner Restart
@@ -263,7 +288,7 @@ If exceeded:
 taskkill /F /T /PID <wrapperPid>
 ```
 
-This kills the entire process tree (wrapper + claude).
+This kills the entire process tree (wrapper + claude). `taskkill` exists only on Windows: on Linux and macOS the job is marked as `timeout` or `cancelled`, but the process is not killed.
 
 ## Deployment Notes
 

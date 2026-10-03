@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "test/**/*",
+    "runner/test/**/*"
+  ],
+  "exclude": [
+    "**/e2e-*.ts"
+  ]
+}

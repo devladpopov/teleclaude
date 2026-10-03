@@ -69,6 +69,25 @@ if (!jobDir) {
   process.exit(1);
 }
 
+let opts = {};
+let finished = false;
+
+// The CLI could not be started (missing binary, bad cwd) or the worker
+// failed: leave the same files as a normal exit, so the runner finishes
+// the job at once and the executor parser reports the reason.
+function fail(msg) {
+  if (finished) return;
+  finished = true;
+  try { writeFileSync(join(jobDir, "error.log"), msg); } catch {}
+  if (opts.exitEvent) {
+    try {
+      appendFileSync(join(jobDir, "stdout.jsonl"), JSON.stringify({ type: "runner_exit", code: 1, stderr: msg }) + "\\n");
+    } catch {}
+  }
+  try { writeFileSync(join(jobDir, "exit-code.txt"), "1"); } catch {}
+  process.exit(1);
+}
+
 try {
   const args = JSON.parse(readFileSync(join(jobDir, "args.json"), "utf-8"));
   const claudePath = args.shift();
@@ -78,11 +97,13 @@ try {
   // needed only here, at start, so it is removed right after reading.
   try { unlinkSync(join(jobDir, "env.json")); } catch {}
   const optsFile = join(jobDir, "worker-opts.json");
-  const opts = existsSync(optsFile) ? JSON.parse(readFileSync(optsFile, "utf-8")) : {};
+  opts = existsSync(optsFile) ? JSON.parse(readFileSync(optsFile, "utf-8")) : {};
 
   const msgStream = createReadStream(join(jobDir, "msg.txt"));
-  const outStream = createWriteStream(join(jobDir, "stdout.jsonl"));
-  const errStream = createWriteStream(join(jobDir, "stderr.log"));
+  // "a": the streams open asynchronously, and "w" would truncate a
+  // runner_exit line that fail() already appended (spawn error).
+  const outStream = createWriteStream(join(jobDir, "stdout.jsonl"), { flags: "a" });
+  const errStream = createWriteStream(join(jobDir, "stderr.log"), { flags: "a" });
 
   const proc = spawn(claudePath, args, {
     cwd: projectPath,
@@ -92,13 +113,15 @@ try {
     windowsHide: true,
   });
 
-  writeFileSync(join(jobDir, "claude.pid"), String(proc.pid));
+  if (proc.pid) writeFileSync(join(jobDir, "claude.pid"), String(proc.pid));
 
   msgStream.pipe(proc.stdin);
   proc.stdout.pipe(outStream);
   proc.stderr.pipe(errStream);
 
   proc.on("close", (code) => {
+    if (finished) return;
+    finished = true;
     const finish = () => {
       writeFileSync(join(jobDir, "exit-code.txt"), String(code ?? 1));
       process.exit(code ?? 1);
@@ -120,14 +143,9 @@ try {
     errStream.end(done);
   });
 
-  proc.on("error", (err) => {
-    writeFileSync(join(jobDir, "error.log"), err.message);
-    process.exit(1);
-  });
+  proc.on("error", (err) => fail(err.message));
 } catch (err) {
-  const msg = err instanceof Error ? err.message : String(err);
-  writeFileSync(join(jobDir, "error.log"), msg);
-  process.exit(1);
+  fail(err instanceof Error ? err.message : String(err));
 }
 `;
 }

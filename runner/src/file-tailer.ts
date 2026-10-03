@@ -23,7 +23,9 @@ export class FileTailer {
   private subscribers: Array<(event: TailerEvent) => void> = [];
   private pollHandle: ReturnType<typeof setInterval> | null = null;
   private complete = false;
-  private lineBuf = ""; // incomplete last line from previous read
+  // Bytes of the incomplete last line. Kept as bytes, not text: a read can
+  // end inside a multi-byte UTF-8 character.
+  private lineBuf: Buffer = Buffer.alloc(0);
 
   // Ring buffer of past events for SSE replay
   private eventHistory: TailerEvent[] = [];
@@ -51,11 +53,13 @@ export class FileTailer {
 
   /** Mark this tailer as complete (process exited). */
   markComplete(): void {
+    // Read what was written since the last poll: the worker appends its
+    // last lines right before it exits, possibly between two polls.
+    this.poll();
     // Flush remaining partial line
-    if (this.lineBuf.trim()) {
-      this.processLine(this.lineBuf.trim());
-      this.lineBuf = "";
-    }
+    const rest = this.lineBuf.toString("utf-8").trim();
+    this.lineBuf = Buffer.alloc(0);
+    if (rest) this.processLine(rest);
     this.complete = true;
   }
 
@@ -107,13 +111,13 @@ export class FileTailer {
 
       this.byteOffset = fileSize;
 
-      // Decode the chunk and split into lines
-      const chunk = buf.toString("utf-8");
-      const text = this.lineBuf + chunk;
-      const lines = text.split("\n");
-
-      // Last element may be incomplete — save it
-      this.lineBuf = lines.pop() || "";
+      // Decode complete lines only; 0x0A never occurs inside a UTF-8
+      // multi-byte sequence, so cutting at the last newline is safe.
+      const bytes = this.lineBuf.length ? Buffer.concat([this.lineBuf, buf]) : buf;
+      const end = bytes.lastIndexOf(0x0a);
+      this.lineBuf = Buffer.from(bytes.subarray(end + 1));
+      if (end < 0) return;
+      const lines = bytes.subarray(0, end).toString("utf-8").split("\n");
 
       for (const line of lines) {
         const trimmed = line.trim();

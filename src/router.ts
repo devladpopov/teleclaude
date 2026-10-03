@@ -630,17 +630,19 @@ export class Router {
           modelOverride: options.modelOverride,
         });
 
-        if (result.ok) {
-          console.log(
-            `[Director] Triggered + spawned ${state.name} (${topicKey}) on ${options.modelOverride}`
-          );
-          return { ok: true, account };
-        } else if (result.rateLimited) {
+        // rateLimited first: a limit can come back as reply text with ok=true
+        // (opencode reports a provider 429 as a result, claude sometimes too).
+        if (result.rateLimited) {
           console.warn(
             `[Director] Rate-limit on ${state.name} for account "${account}". ` +
             `Director will pause and resume after the quota window.`
           );
           return { ok: false, rateLimited: true, account, error: result.error };
+        } else if (result.ok) {
+          console.log(
+            `[Director] Triggered + spawned ${state.name} (${topicKey}) on ${options.modelOverride}`
+          );
+          return { ok: true, account };
         } else {
           console.error(
             `[Director] Spawn failed for ${state.name}: ${result.error}`
@@ -670,6 +672,8 @@ export class Router {
         this.lastTickRegistry = registry;
       },
       onDashboardUpdate: async (_dashboard) => {
+        // Sync off (no DASHBOARD_SYNC_REMOTE): the upload helpers are no-ops.
+        if (dashboardSync.disabled) return;
         // Fail-soft: log and continue. Hosting downtime must not crash the
         // router — next tick will retry, and the local dashboard.json is
         // already authoritative for any future re-deploy.
@@ -2997,7 +3001,9 @@ export class Router {
     }
 
     // Anthropic sometimes returns a 200 with rate-limit text inside the body.
-    if (response && this.isRateLimitMessage(response)) rateLimited = true;
+    // Only short replies: a limit message is one line, while a work report
+    // may mention "429" or "rate limit" and must not pause the provider.
+    if (response && response.length <= 500 && this.isRateLimitMessage(response)) rateLimited = true;
 
     // Update session ID (same as handleMessage)
     const newSessionId = this.processManager.getSessionId(topicKey);

@@ -33,6 +33,7 @@ TeleClaude превращает Telegram-супергруппу с топика�
 - [Пул браузеров](#пул-браузеров)
 - [Медиа: голос, видео, фото, документы](#медиа-голос-видео-фото-документы)
 - [Запуск как службы Windows](#запуск-как-службы-windows)
+- [Разработка](#разработка)
 - [Безопасность](#безопасность)
 - [Условия провайдеров](#условия-провайдеров)
 - [Планы](#планы)
@@ -130,7 +131,7 @@ Telegram-супергруппа (режим форума)
 
 ## Требования
 
-- Windows 10/11. Код и скрипты рассчитаны в первую очередь на Windows: PowerShell-скрипты, `taskkill`, `curl.exe`, службы NSSM, задачи планировщика. На других платформах не тестировалось.
+- Windows 10/11 основная платформа: PowerShell-скрипты, `taskkill`, `curl.exe`, службы NSSM, задачи планировщика. На Linux и macOS роутер, runner и тесты работают (CI проверяет Ubuntu и Windows), с одним ограничением: в режиме runner команды `/cancel`, `/kill`, `/killall` и таймаут простоя останавливают задачу через `taskkill`, поэтому там задача помечается остановленной, а процесс CLI продолжает работать. PowerShell-скрипты из `scripts/` требуют Windows.
 - [Bun](https://github.com/oven-sh/bun), свежий релиз 1.x.
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) свежей версии с поддержкой `--effort`, с API-ключом Anthropic (рекомендуется) или с вашим собственным входом в аккаунт Claude для личного использования. См. [Условия провайдеров](#условия-провайдеров).
 - Токен бота от [@BotFather](https://t.me/BotFather) и супергруппа с включёнными топиками. Бота нужно сделать администратором.
@@ -149,6 +150,8 @@ bun install
 cd runner && bun install && cd ..
 ```
 
+Установите Claude Code CLI и проверьте в терминале, что `claude -p "hi"` отвечает: либо один раз войдите через `claude`, либо подготовьте API-ключ Anthropic для `config/accounts.json`. Для провайдеров кроме Claude установите ещё OpenCode (`npm i -g opencode-ai`), см. [Провайдеры](#провайдеры).
+
 **2. Настройка**
 
 ```bash
@@ -156,18 +159,23 @@ cp .env.example .env                                   # TELEGRAM_BOT_TOKEN
 cp config/settings.example.json config/settings.json   # allowedUsers, projectsRoot
 cp config/topics.example.json   config/topics.json     # бот заполнит сам
 cp config/accounts.example.json config/accounts.json   # по желанию, режимы авторизации
+cp config/providers.example.json config/providers.json # по желанию, провайдеры кроме Claude
 cp templates/SOUL.example.md        templates/SOUL.md
 cp templates/main-memory.example.md templates/main-memory.md
 ```
 
-Впишите свой Telegram user id в `telegram.allowedUsers`, а абсолютный путь к папке проектов в `projectsRoot`. Отредактируйте `SOUL.md` (характер и правила общения) и `main-memory.md` (факты, общие для всех топиков). `templates/TG-RULES.md` это короткий универсальный шаблон правил оформления ответов в Telegram (стиль, абсолютные пути к файлам, таблицы, тексты для копирования). Бот показывает его по `/rules`, а краткая выжимка встроена в каждый системный промпт; поправьте его под себя.
+Впишите свой Telegram user id в `telegram.allowedUsers`, а абсолютный путь к папке проектов в `projectsRoot`. В примере `accounts.json` активен режим `api` (API-ключ): укажите путь к файлу с ключом в `keyFile` или поставьте `"active": "personal"`, если пользуетесь своим входом в Claude Code. Без `accounts.json` используется собственный вход CLI.
+
+Создайте MCP-конфиг для запусков `~/.claude/spawn-mcp-config.json` (см. [MCP-серверы для запусков](#mcp-серверы-для-запусков)). Без него агент отвечает, но без напоминаний, без `trigger_topic` и без браузера; роутер один раз пишет об этом предупреждение в лог. Отредактируйте `SOUL.md` (характер и правила общения) и `main-memory.md` (факты, общие для всех топиков). `templates/TG-RULES.md` это короткий универсальный шаблон правил оформления ответов в Telegram (стиль, абсолютные пути к файлам, таблицы, тексты для копирования). Бот показывает его по `/rules`, а краткая выжимка встроена в каждый системный промпт; поправьте его под себя.
 
 **3. Запуск runner и роутера** (в двух терминалах)
 
 ```bash
-cd runner && bun run src/index.ts     # sidecar, нужен "runner": { "enabled": true }
-bun run start                         # роутер
+cd runner && bun --env-file=../.env run src/index.ts   # sidecar, нужен "runner": { "enabled": true }
+bun run start                                          # роутер, из корня репозитория
 ```
+
+Bun читает `.env` только из текущей папки. Роутер стартует в корне репозитория и читает его сам; runner стартует в `runner/`, и чтобы он увидел `CLAUDE_RUNNER_*`, нужен `--env-file=../.env`. Порт runner роутер узнаёт из `runner/data/.runner.port`, поэтому при смене порта ничего настраивать не нужно.
 
 **4. Работа.** Добавьте бота в супергруппу и напишите в любой топик. Роутер создаст каталог проекта и ответит там же. Новые группы регистрируются в режиме `mention-only`; переключить группу в `active` можно командой `/mode active`.
 
@@ -181,6 +189,7 @@ bun run start                         # роутер
 |------|----------|--------------|
 | `telegram.allowedUsers` | Telegram user id, которых бот слушает. Остальные игнорируются | `[]` |
 | `processes.claudePath` | Путь к Claude Code CLI | `claude` |
+| `processes.opencodePath` | Путь к OpenCode CLI для провайдеров с `"executor": "opencode"` | `opencode` |
 | `processes.defaultFlags` | Дополнительные флаги для каждого запуска | `["--dangerously-skip-permissions"]` |
 | `processes.defaultModel` | Алиас модели, если у топика нет своей | нет |
 | `processes.maxConcurrent` | Сколько процессов Claude работает параллельно | `5` |
@@ -285,12 +294,14 @@ bun run start                         # роутер
 | `DASHBOARD_SYNC_DISABLED` | нет | `1` выключает выгрузку |
 | `GIT_BASH_PATH` | нет | `bash.exe`, в котором выполняется выгрузка через `cat \| ssh`. По умолчанию стандартный путь Git for Windows |
 | `TELECLAUDE_MEMORY_DIR` | нет | Общий каталог долговременной памяти. По умолчанию `~/.teleclaude/memory` |
-| `TELECLAUDE_MCP_CONFIG` | нет | Статичный MCP-конфиг для каждого запуска. По умолчанию `~/.claude/spawn-mcp-config.json` |
+| `TELECLAUDE_MCP_CONFIG` | нет | Статичный MCP-конфиг для каждого запуска. По умолчанию `~/.claude/spawn-mcp-config.json`. Пока файла нет, не передаётся |
+| `TELECLAUDE_HOME` | нет | Базовая папка для относительных путей `keyFile` в `config/providers.json`. По умолчанию `~/.teleclaude` |
+| `TELECLAUDE_PROVIDERS` | нет | Путь к файлу провайдеров. По умолчанию `config/providers.json` |
 | `ROUTER_WEBHOOK_URL` / `ROUTER_WEBHOOK_SECRET` | нет | Режим webhook вместо long-polling. Секрет проверяется в каждом запросе |
 | `ROUTER_HEALTH_PORT` | нет | HTTP-порт роутера (`/health`, `/webhook`, `/internal/trigger`). По умолчанию `7885` |
 | `ROUTER_BIND_HOST` | нет | Интерфейс, на котором слушает HTTP-сервер роутера. По умолчанию `127.0.0.1` |
 | `ROUTER_INTERNAL_SECRET` | нет | Общий секрет для `/internal/trigger`. Если задан, запрос должен передать его в заголовке `x-router-internal-secret`. `mcp-router` отправляет его сам, если эта же переменная есть в его окружении (запуски наследуют окружение роутера) |
-| `CLAUDE_RUNNER_PORT` / `CLAUDE_RUNNER_MAX_CONCURRENT` | нет | Порт и параллельность runner. По умолчанию `7878` и `15` |
+| `CLAUDE_RUNNER_PORT` / `CLAUDE_RUNNER_MAX_CONCURRENT` | нет | Порт и параллельность runner. По умолчанию `7878` и `15`. Их читает процесс runner: запускайте его с `--env-file=../.env`, чтобы он взял их из `.env` |
 | `CLAUDE_RUNNER_HOST` | нет | Интерфейс, на котором слушает runner. По умолчанию `127.0.0.1` |
 | `BROWSER_POOL_PROFILE_ROOT` | нет | Каталог профилей пула браузеров. По умолчанию `~/.teleclaude/browser-pool` |
 | `BROWSER_POOL_DEDICATED` | нет | Карта топиков на выделенные профили Chrome. По умолчанию `config/browser-dedicated.json` |
@@ -298,7 +309,7 @@ bun run start                         # роутер
 
 ### MCP-серверы для запусков
 
-В print-режиме `claude -p` не подгружает ваши глобальные MCP-серверы. Роутер передаёт один файл через `--mcp-config` (`TELECLAUDE_MCP_CONFIG`). Зарегистрируйте в нём серверы из репозитория:
+В print-режиме `claude -p` не подгружает ваши глобальные MCP-серверы. Роутер передаёт один файл через `--mcp-config` (`TELECLAUDE_MCP_CONFIG`, по умолчанию `~/.claude/spawn-mcp-config.json`), если этот файл существует. Зарегистрируйте в нём серверы из репозитория, с абсолютными путями к вашей копии:
 
 ```json
 {
@@ -448,11 +459,21 @@ nssm install ClaudeRouter "C:\path\to\bun.exe" "run src/index.ts"
 nssm set ClaudeRouter AppDirectory "C:\path\to\teleclaude"
 nssm set ClaudeRouter AppEnvironmentExtra "DIRECTOR_ALLOWED_CHATS=-1001234567890"
 
-nssm install ClaudeRunner "C:\path\to\bun.exe" "run src/index.ts"
+nssm install ClaudeRunner "C:\path\to\bun.exe" "--env-file=..\.env run src/index.ts"
 nssm set ClaudeRunner AppDirectory "C:\path\to\teleclaude\runner"
 ```
 
 Полезные скрипты в `scripts/`: `doctor.ps1` (проверка здоровья с кодами выхода), `mcp-health-watchdog.ps1`, `playwright-mcp-daemon.ps1`, а также `setup-cloudflared.ps1` и `set-telegram-webhook.ps1` для режима webhook через туннель. Роутер пишет lock-файл `.router.pid` и завершается, если уже работает другой экземпляр. Это избавляет от конфликтов 409 в Telegram.
+
+## Разработка
+
+```bash
+bun install && (cd runner && bun install)
+bun run typecheck   # src, runner/src и тесты
+bun test            # unit- и интеграционные тесты, без Telegram и без настоящих CLI
+```
+
+Всё внешнее в тестах замокано: Telegram Bot API отвечает локально, runner заменён локальным HTTP-сервером, а CLI claude и opencode заменены маленькой скомпилированной программой, которая воспроизводит записанный вывод (`runner/test/fixtures`). CI (`.github/workflows/ci.yml`) запускает то же самое на Ubuntu и Windows.
 
 ## Безопасность
 
