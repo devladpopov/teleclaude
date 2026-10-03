@@ -51,6 +51,9 @@ export class FileTailer {
 
   /** Mark this tailer as complete (process exited). */
   markComplete(): void {
+    // Read what was written since the last poll: the worker appends its
+    // last lines right before it exits, possibly between two polls.
+    this.poll();
     // Flush remaining partial line
     if (this.lineBuf.trim()) {
       this.processLine(this.lineBuf.trim());
