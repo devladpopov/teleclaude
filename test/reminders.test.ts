@@ -118,6 +118,25 @@ describe("ReminderStore", () => {
     expect(store.popDue(Date.now()).map((r) => r.text)).toEqual(["from mcp"]);
   });
 
+  test("add and remove keep reminders written by reminder-mcp since the last read", () => {
+    // reminder-mcp (inside a running job) and the router write the same file.
+    // The router must not overwrite it with its stale in-memory copy.
+    const path = freshPath();
+    const store = new ReminderStore(path);
+    const fromMcp = reminder({ text: "from mcp" });
+    writeFileSync(path, JSON.stringify({ reminders: [fromMcp] }));
+
+    store.add(reminder({ text: "from /remind" }));
+    expect(JSON.parse(readFileSync(path, "utf-8")).reminders.map((r: Reminder) => r.text).sort()).toEqual(["from /remind", "from mcp"]);
+
+    const another = reminder({ text: "second from mcp" });
+    const onDisk = JSON.parse(readFileSync(path, "utf-8"));
+    writeFileSync(path, JSON.stringify({ reminders: [...onDisk.reminders, another] }));
+    expect(store.remove(fromMcp.id)).toBe(true);
+    expect(JSON.parse(readFileSync(path, "utf-8")).reminders.map((r: Reminder) => r.text).sort()).toEqual(["from /remind", "second from mcp"]);
+    expect(store.list().map((r) => r.text).sort()).toEqual(["from /remind", "second from mcp"]);
+  });
+
   test("corrupt file: empty list, no crash", () => {
     const path = freshPath();
     writeFileSync(path, "{broken");

@@ -210,7 +210,11 @@ export class ReminderStore {
     renameSync(tmp, this.path);
   }
 
+  // list/add/remove re-read the file first: reminder-mcp (inside running
+  // jobs) writes the same file, and writing a stale in-memory copy back
+  // would drop the reminders it added since our last read.
   list(filter?: { chatId?: string; threadId?: number | null }): Reminder[] {
+    this.load();
     let out = [...this.data.reminders];
     if (filter?.chatId !== undefined) {
       out = out.filter(r => r.chatId === filter.chatId);
@@ -222,11 +226,13 @@ export class ReminderStore {
   }
 
   add(r: Reminder): void {
+    this.load();
     this.data.reminders.push(r);
     this.persistSync();
   }
 
   remove(id: string): boolean {
+    this.load();
     const before = this.data.reminders.length;
     this.data.reminders = this.data.reminders.filter(r => r.id !== id);
     if (this.data.reminders.length !== before) {
