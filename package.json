@@ -6,7 +6,9 @@
   "main": "src/index.ts",
   "scripts": {
     "start": "bun run src/index.ts",
-    "dev": "bun --watch run src/index.ts"
+    "dev": "bun --watch run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p . && tsc -p runner && tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@grammyjs/auto-retry": "^2.0.2",

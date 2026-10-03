@@ -5,7 +5,7 @@
  * the executor parser turn it into router events.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { JobRegistry } from "../src/job-manager.ts";
@@ -101,7 +101,8 @@ describe("claude executor through the worker", () => {
       "--dangerously-skip-permissions",
     ]);
     expect(r.record!.stdin).toBe("привет");
-    expect(r.record!.cwd.replace(/\\/g, "/").toLowerCase()).toBe(project.replace(/\\/g, "/").toLowerCase());
+    // realpath: Windows runners give the temp dir as an 8.3 short path
+    expect(realpathSync.native(r.record!.cwd)).toBe(realpathSync.native(project));
 
     expect(r.events.map((e) => e.type)).toEqual(["system", "assistant", "assistant", "user", "assistant", "result"]);
     expect(r.events[0].sessionId).toBe(UUID);
