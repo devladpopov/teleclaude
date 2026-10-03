@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "fs";
+import { mkdtempSync, utimesSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -105,5 +105,90 @@ describe("reply prefix", () => {
     expect(providerTag(deepseek)).toBe("deepseek:deepseek-chat");
     expect(providerTag({ ...deepseek, id: "cloudru", model: "Qwen/Qwen3-235B-A22B-Instruct-2507" })).toBe("cloudru:Qwen3-235B-A22B-Instruct-2507");
     expect(providerTag({ ...deepseek, tag: "yandexgpt" })).toBe("yandexgpt");
+  });
+});
+
+describe("providers.json: example and reload", () => {
+  test("config/providers.example.json is valid as shipped", () => {
+    const f = loadProviders(join(import.meta.dir, "..", "config", "providers.example.json"));
+    expect(f.default).toBe("claude");
+    expect(f.providers.map((p) => p.id)).toEqual(["claude", "deepseek", "qwen", "cloudru", "yandexgpt", "gigachat"]);
+    expect(f.providers.filter((p) => p.executor === "opencode").every((p) => validateProvider(p).length === 0)).toBe(true);
+  });
+
+  test("broken JSON: only claude", () => {
+    const path = join(dir, "broken.json");
+    writeFileSync(path, "{ not json");
+    expect(loadProviders(path).providers.map((p) => p.id)).toEqual(["claude"]);
+  });
+
+  test("unknown default falls back to claude", () => {
+    const path = join(dir, "bad-default.json");
+    writeFileSync(path, JSON.stringify({ default: "gone", providers: [deepseek] }));
+    expect(resolveTopicProvider(mapping(), loadProviders(path)).id).toBe("claude");
+  });
+
+  test("file is re-read after a change, no restart", () => {
+    const path = join(dir, "reload.json");
+    writeFileSync(path, JSON.stringify({ providers: [] }));
+    utimesSync(path, 1_000, 1_000);
+    expect(loadProviders(path).providers.map((p) => p.id)).toEqual(["claude"]);
+    writeFileSync(path, JSON.stringify({ providers: [deepseek] }));
+    utimesSync(path, 2_000, 2_000);
+    expect(loadProviders(path).providers.map((p) => p.id)).toEqual(["claude", "deepseek"]);
+  });
+
+  test("validation: bad id, bad executor, claude needs no URL", () => {
+    expect(validateProvider({ id: "a b", executor: "claude" } as ProviderConfig)).toHaveLength(1);
+    expect(validateProvider({ id: "x", executor: "codex" } as any)).toHaveLength(1);
+    expect(validateProvider({ id: "claude2", executor: "claude" })).toEqual([]);
+    expect(validateProvider({ ...deepseek, apiKeyEnv: "deepseek-key" })).toHaveLength(1);
+  });
+});
+
+describe("keys: file formats", () => {
+  test("export prefix and single quotes", () => {
+    const file = join(dir, "export.env");
+    writeFileSync(file, "export DEEPSEEK_API_KEY='sk-export'\r\n");
+    expect(readProviderKey({ ...deepseek, keyFile: file })).toBe("sk-export");
+  });
+
+  test("empty value in the file falls back to the process env", () => {
+    const file = join(dir, "empty.env");
+    writeFileSync(file, "TC_TEST_KEY_Y=\n");
+    process.env.TC_TEST_KEY_Y = "sk-env-y";
+    expect(readProviderKey({ ...deepseek, keyFile: file, apiKeyEnv: "TC_TEST_KEY_Y" })).toBe("sk-env-y");
+    delete process.env.TC_TEST_KEY_Y;
+  });
+
+  test("provider without apiKeyEnv has no key", () => {
+    expect(readProviderKey({ id: "local", executor: "opencode" })).toBeUndefined();
+  });
+
+  test("job env without a key: secrets still removed, nothing added", () => {
+    expect(buildProviderEnv({ PATH: "/bin", github_token: "g", MY_PASSWORD: "p" }, deepseek, undefined)).toEqual({ PATH: "/bin" });
+  });
+});
+
+describe("sessions: edge cases", () => {
+  test("garbage id is not stored, clearing an empty slot is a no-op", () => {
+    const m = mapping();
+    expect(storeSession(m, "not-a-session")).toBe(false);
+    expect(storeSession(m, undefined)).toBe(false);
+    expect(clearSession(m, "claude")).toBe(false);
+    expect(clearSession(m, "opencode")).toBe(false);
+    expect(m).toEqual(mapping());
+  });
+
+  test("claude slot: store, same id again is no change, clear", () => {
+    const m = mapping();
+    expect(storeSession(m, UUID)).toBe(true);
+    expect(storeSession(m, UUID)).toBe(false);
+    expect(clearSession(m, "claude")).toBe(true);
+    expect(m.sessionId).toBeUndefined();
+  });
+
+  test("tag without a model is the provider id", () => {
+    expect(providerTag({ id: "local", executor: "opencode" })).toBe("local");
   });
 });

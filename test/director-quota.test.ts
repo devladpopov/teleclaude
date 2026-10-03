@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -31,8 +31,8 @@ describe("Director quota pools", () => {
       dashboardPath: join(dir, "dashboard.json"),
       maxTriggersPerTick: 5,
       getActiveAccountName: () => "main",
-      getQuotaKey: (k) => pool[k],
-      onStaleTopic: async (topicKey) => {
+      getQuotaKey: (k: string) => pool[k],
+      onStaleTopic: async (topicKey: string) => {
         calls.push(topicKey);
         return topicKey === "-100:1" || (rateLimitMain && pool[topicKey] === "main")
           ? { ok: false, rateLimited: true, account: pool[topicKey], error: "API Error: 429" }
@@ -70,5 +70,117 @@ describe("Director quota pools", () => {
     await director.tick();
     expect(calls).toContain("-100:5");
     expect(calls).not.toContain("-100:6");
+  });
+});
+
+// Shared setup for the pause lifecycle tests below.
+function setup() {
+  const dir = mkdtempSync(join(tmpdir(), "tc-director-"));
+  const topics: TopicsConfig = { groups: {}, topics: {} };
+  const pool: Record<string, string> = {};
+  const mk = (key: string, name: string, quotaKey: string) => {
+    const project = join(dir, name);
+    mkdirSync(project);
+    const cp = join(project, "CHECKPOINT.md");
+    writeFileSync(cp, `STATUS: IN_PROGRESS\nTASK: ${name}\nNEXT: continue ${name}\n`);
+    const old = (Date.now() - 3 * 60 * 60 * 1000) / 1000;
+    utimesSync(cp, old, old);
+    (topics.topics as any)[key] = { name, project, memory: [], created: "2026-10-03" };
+    pool[key] = quotaKey;
+  };
+  const calls: string[] = [];
+  const limited = new Set<string>();
+  const make = () => new Director({
+    topics,
+    registryPath: join(dir, "registry.json"),
+    dashboardPath: join(dir, "dashboard.json"),
+    maxTriggersPerTick: 5,
+    getActiveAccountName: () => "main",
+    getQuotaKey: (k: string) => pool[k],
+    onStaleTopic: async (topicKey: string) => {
+      calls.push(topicKey);
+      return limited.has(pool[topicKey])
+        ? { ok: false, rateLimited: true, account: pool[topicKey], resumeAt: Date.now() + 60 * 60 * 1000, error: "API Error: 429" }
+        : { ok: true, account: pool[topicKey] };
+    },
+  } as any);
+  const registry = () => JSON.parse(readFileSync(join(dir, "registry.json"), "utf-8"));
+  return { mk, calls, limited, make, registry };
+}
+
+describe("Director provider pause lifecycle", () => {
+  afterEach(() => setSystemTime());
+
+  test("pause survives a router restart and only holds that provider", async () => {
+    const s = setup();
+    s.mk("-100:1", "ds", "provider:deepseek");
+    s.limited.add("provider:deepseek");
+    const d1 = s.make();
+    await d1.tick();
+    await d1.tick();
+    expect(s.calls).toEqual(["-100:1"]);
+    expect(s.registry().accountQuota["provider:deepseek"].reason).toBe("API Error: 429");
+    expect(s.registry().deferredTopics.map((e: any) => e.account)).toEqual(["provider:deepseek"]);
+
+    // New process: quota and the deferred entry come back from the registry
+    s.mk("-100:2", "claude", "main");
+    s.calls.length = 0;
+    const d2 = s.make();
+    (d2 as any).loadTriggerState(); // what start() does before the first tick
+    await d2.tick(); // boot tick
+    await d2.tick();
+    expect(s.calls).toEqual(["-100:2"]);
+  });
+
+  test("after resumeAt the deferred topic runs again and the pause is gone", async () => {
+    const s = setup();
+    s.mk("-100:1", "ds", "provider:deepseek");
+    s.limited.add("provider:deepseek");
+    const d = s.make();
+    await d.tick();
+    await d.tick();
+    expect(s.calls).toEqual(["-100:1"]);
+
+    // Still inside the window: nothing fires
+    s.calls.length = 0;
+    await d.tick();
+    expect(s.calls).toEqual([]);
+
+    // The provider is fine again, the window is over
+    s.limited.clear();
+    setSystemTime(new Date(Date.now() + 61 * 60 * 1000));
+    await d.tick();
+    expect(s.calls).toEqual(["-100:1"]);
+    expect(s.registry().deferredTopics).toEqual([]);
+  });
+
+  test("without getQuotaKey every topic shares the Claude auth mode pool", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tc-director-"));
+    const topics: TopicsConfig = { groups: {}, topics: {} };
+    for (const [key, name] of [["-100:1", "a"], ["-100:2", "b"]]) {
+      const project = join(dir, name);
+      mkdirSync(project);
+      const cp = join(project, "CHECKPOINT.md");
+      writeFileSync(cp, `STATUS: IN_PROGRESS\nTASK: ${name}\nNEXT: go\n`);
+      const old = (Date.now() - 3 * 60 * 60 * 1000) / 1000;
+      utimesSync(cp, old, old);
+      (topics.topics as any)[key] = { name, project, memory: [], created: "2026-10-03" };
+    }
+    const calls: string[] = [];
+    const d = new Director({
+      topics,
+      registryPath: join(dir, "registry.json"),
+      dashboardPath: join(dir, "dashboard.json"),
+      maxTriggersPerTick: 1,
+      getActiveAccountName: () => "main",
+      onStaleTopic: async (k: string) => {
+        calls.push(k);
+        return { ok: false, rateLimited: true, account: "main" };
+      },
+    } as any);
+    await d.tick();
+    await d.tick();
+    await d.tick();
+    expect(calls).toHaveLength(1);
   });
 });

@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","cwd":"C:/work/project","session_id":"0f8c2a1e-1b2c-4d5e-8f90-123456789abc","tools":[],"model":"claude-opus-5-5"}
+{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"API Error: 429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Rate limited\"}}"}]},"session_id":"0f8c2a1e-1b2c-4d5e-8f90-123456789abc"}
+{"type":"result","subtype":"success","is_error":true,"result":"API Error: 429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Rate limited\"}}","session_id":"0f8c2a1e-1b2c-4d5e-8f90-123456789abc"}

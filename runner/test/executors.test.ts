@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import { createOpencodeParser, buildOpencodeConfig, convertMcpServers, opencodeExecutor } from "../src/executors/opencode.ts";
 import { claudeExecutor } from "../src/executors/claude.ts";
@@ -188,5 +189,180 @@ describe("claude executor stays unchanged", () => {
     expect(getExecutor("opencode").id).toBe("opencode");
     expect(isExecutorId("opencode")).toBe(true);
     expect(isExecutorId("codex")).toBe(false);
+  });
+});
+
+describe("claude command line", () => {
+  test("defaults: model opus, no resume, no prompt, permissions flag last", () => {
+    const l = claudeExecutor.launch({ ...base }, "C:/jobs/1");
+    expect(l.args).toEqual([
+      "claude", "-p", "--output-format", "stream-json", "--verbose", "--model", "opus",
+      "--dangerously-skip-permissions",
+    ]);
+    expect(l.files).toBeUndefined();
+  });
+
+  test("claudePath and the model are passed through as is", () => {
+    const l = claudeExecutor.launch({ ...base, claudePath: "C:\\Tools\\claude.exe", model: "claude-opus-5-5" }, "C:/jobs/1");
+    expect(l.args[0]).toBe("C:\\Tools\\claude.exe");
+    expect(l.args.slice(5, 7)).toEqual(["--model", "claude-opus-5-5"]);
+  });
+
+  test("router flags keep their order, --effort included", () => {
+    const l = claudeExecutor.launch(
+      { ...base, flags: ["--dangerously-skip-permissions", "--mcp-config", "m.json", "--effort", "max"] },
+      "C:/jobs/1",
+    );
+    expect(l.args.slice(7)).toEqual([
+      "--dangerously-skip-permissions", "--mcp-config", "m.json", "--effort", "max", "--dangerously-skip-permissions",
+    ]);
+  });
+});
+
+describe("claude stream-json parser", () => {
+  test("text blocks of one event are joined, tool detail is cut to 60 chars", () => {
+    const e = parseStreamJsonEvent(JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "text", text: "a" },
+          { type: "text", text: "b" },
+          { type: "tool_use", name: "Bash", input: { command: "x".repeat(100) } },
+        ],
+      },
+    }))!;
+    expect(e.assistantText).toBe("ab");
+    expect(e.toolName).toBe("Bash");
+    expect(e.toolDetail).toBe("x".repeat(57) + "...");
+  });
+
+  test("tool detail falls back to the first string field, undefined without one", () => {
+    const first = parseStreamJsonEvent(JSON.stringify({
+      type: "assistant", message: { content: [{ type: "tool_use", name: "mcp__x", input: { n: 1, topicKey: "-100:7" } }] },
+    }))!;
+    expect(first.toolDetail).toBe("-100:7");
+    const none = parseStreamJsonEvent(JSON.stringify({
+      type: "assistant", message: { content: [{ type: "tool_use", name: "TodoWrite", input: { todos: [] } }] },
+    }))!;
+    expect(none.toolDetail).toBeUndefined();
+  });
+
+  test("invalid session ids are not reported", () => {
+    const e = parseStreamJsonEvent(JSON.stringify({ type: "system", subtype: "init", session_id: "../../etc" }))!;
+    expect(e.sessionId).toBeUndefined();
+  });
+
+  test("non-objects and broken lines are null, events without type are 'unknown'", () => {
+    expect(parseStreamJsonEvent("42")).toBeNull();
+    expect(parseStreamJsonEvent("null")).toBeNull();
+    expect(parseStreamJsonEvent("{")).toBeNull();
+    expect(parseStreamJsonEvent("{}")!.type).toBe("unknown");
+  });
+
+  test("error result without text keeps errors and no resultText", () => {
+    const e = parseStreamJsonEvent(JSON.stringify({ type: "result", subtype: "error_during_execution", errors: ["boom"] }))!;
+    expect(e.isResult).toBe(true);
+    expect(e.resultText).toBeUndefined();
+  });
+});
+
+describe("opencode command line", () => {
+  test("provider wins over request.model, executorPath replaces the binary", () => {
+    const l = opencodeExecutor.launch(
+      {
+        ...base, executor: "opencode", executorPath: "C:/bin/opencode.exe", model: "other/model",
+        provider: { id: "qwen", baseURL: "https://x/v1", model: "qwen-plus" },
+      },
+      "C:/jobs/1",
+    );
+    expect(l.args[0]).toBe("C:/bin/opencode.exe");
+    expect(l.args.slice(l.args.indexOf("--model"), l.args.indexOf("--model") + 2)).toEqual(["--model", "qwen/qwen-plus"]);
+  });
+
+  test("model with a slash is used without a provider", () => {
+    const l = opencodeExecutor.launch({ ...base, executor: "opencode", model: "openrouter/some-model" }, "C:/jobs/1");
+    expect(l.args).toContain("openrouter/some-model");
+  });
+
+  test("provider without apiKeyEnv gets no apiKey option, custom npm package kept", () => {
+    const cfg = buildOpencodeConfig(
+      { ...base, executor: "opencode", provider: { id: "local", baseURL: "http://127.0.0.1:8090/v1", model: "m", npm: "@ai-sdk/openai" } },
+      "C:/jobs/1",
+    )!;
+    expect(cfg.provider).toEqual({
+      local: { npm: "@ai-sdk/openai", name: "local", options: { baseURL: "http://127.0.0.1:8090/v1" }, models: { m: { name: "m", tool_call: true } } },
+    });
+  });
+
+  test("broken or missing MCP config is ignored", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tc-mcp-"));
+    const broken = join(dir, "broken.json");
+    writeFileSync(broken, "{not json");
+    expect(buildOpencodeConfig({ ...base, executor: "opencode", mcpConfigPath: broken }, "C:/jobs/1")).toBeUndefined();
+    expect(buildOpencodeConfig({ ...base, executor: "opencode", mcpConfigPath: join(dir, "none.json") }, "C:/jobs/1")).toBeUndefined();
+  });
+
+  test("remote MCP keeps headers, args become strings", () => {
+    expect(convertMcpServers({
+      remote: { type: "sse", url: "http://h/sse", headers: { Authorization: "Bearer x" } },
+      local: { command: "node", args: ["s.js", 8931] },
+    })).toEqual({
+      remote: { type: "remote", url: "http://h/sse", enabled: true, headers: { Authorization: "Bearer x" } },
+      local: { type: "local", command: ["node", "s.js", "8931"], enabled: true },
+    });
+    expect(convertMcpServers(null)).toEqual({});
+  });
+});
+
+describe("opencode event stream", () => {
+  const SES = "ses_f01618370ffezwYXLHTkQb5v8S";
+  const line = (o: unknown) => JSON.stringify(o);
+
+  test("result text is the text of the final message only, usage and cost kept", () => {
+    const parse = createOpencodeParser();
+    parse(line({ type: "step_start", sessionID: SES, part: {} }));
+    parse(line({ type: "text", sessionID: SES, part: { messageID: "m1", text: "plan" } }));
+    parse(line({ type: "step_finish", sessionID: SES, part: { messageID: "m1", reason: "tool-calls" } }));
+    const second = parse(line({ type: "step_start", sessionID: SES, part: {} }))!;
+    expect(second.raw).toMatchObject({ type: "system", subtype: "step_start" });
+    parse(line({ type: "text", sessionID: SES, part: { messageID: "m2", text: "Готово, " } }));
+    parse(line({ type: "text", sessionID: SES, part: { messageID: "m2", text: "всё." } }));
+    const r = parse(line({
+      type: "step_finish", sessionID: SES,
+      part: { messageID: "m2", reason: "stop", cost: 0.002, tokens: { input: 100, output: 20 } },
+    }))!;
+    expect(r.isResult).toBe(true);
+    expect(r.resultText).toBe("Готово, всё.");
+    expect(r.raw).toMatchObject({
+      type: "result", subtype: "success", result: "Готово, всё.", total_cost_usd: 0.002,
+      usage: { input_tokens: 100, output_tokens: 20 }, stop_reason: "stop", session_id: SES,
+    });
+  });
+
+  test("tool call without input: name kept, no detail", () => {
+    const parse = createOpencodeParser();
+    const e = parse(line({ type: "tool_use", part: { tool: "todowrite", callID: "c1" } }))!;
+    expect(e.toolName).toBe("todowrite");
+    expect(e.toolDetail).toBeUndefined();
+    expect((e.raw as any).message.content[0]).toEqual({ type: "tool_use", id: "c1", name: "todowrite", input: {} });
+  });
+
+  test("error without status code: 'Name: message'; status code: 'API Error: <code>'", () => {
+    const a = createOpencodeParser()(line({ type: "error", error: { name: "ProviderInitError", data: { message: "no key" } } }))!;
+    expect(a.resultText).toBe("ProviderInitError: no key");
+    const b = createOpencodeParser()(line({ type: "error", error: { name: "APIError", data: { message: "Payment required", statusCode: 402 } } }))!;
+    expect(b.resultText).toBe("API Error: 402 Payment required");
+    expect(b.raw).toMatchObject({ is_error: true, errors: ["API Error: 402 Payment required"] });
+  });
+
+  test("a garbage sessionID is never reported", () => {
+    const e = createOpencodeParser()(line({ type: "step_start", sessionID: "ses_; rm -rf /", part: {} }))!;
+    expect(e.sessionId).toBeUndefined();
+    expect(e.raw.session_id).toBeUndefined();
+  });
+
+  test("long stderr is cut to the last 500 chars", () => {
+    const e = createOpencodeParser()(line({ type: "runner_exit", code: 1, stderr: "x".repeat(600) + "END" }))!;
+    expect(e.resultText).toBe(`opencode exited with code 1: ${("x".repeat(600) + "END").slice(-500)}`);
   });
 });
