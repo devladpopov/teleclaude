@@ -35,6 +35,20 @@ describe("FileTailer", () => {
     expect(events[1].eventId).toBe(1);
   });
 
+  test("a Cyrillic character split between two reads is not broken", () => {
+    // The CLI output arrives through a pipe in arbitrary chunks; a poll can
+    // see only the first byte of a two-byte UTF-8 character.
+    const { file, events, poll } = setup();
+    const line = Buffer.from(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Привет" }] } }) + "\n");
+    const cut = line.indexOf(Buffer.from("р")) + 1; // inside "р"
+    writeFileSync(file, line.subarray(0, cut));
+    poll();
+    appendFileSync(file, line.subarray(cut));
+    poll();
+    expect(events).toHaveLength(1);
+    expect(events[0].parsed?.assistantText).toBe("Привет");
+  });
+
   test("replay after a reconnect returns only newer events", () => {
     const { file, tailer, poll } = setup();
     writeFileSync(file, '{"type":"a"}\n{"type":"b"}\n{"type":"c"}\n');
