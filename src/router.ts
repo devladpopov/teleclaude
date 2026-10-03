@@ -3001,7 +3001,9 @@ export class Router {
     }
 
     // Anthropic sometimes returns a 200 with rate-limit text inside the body.
-    if (response && this.isRateLimitMessage(response)) rateLimited = true;
+    // Only short replies: a limit message is one line, while a work report
+    // may mention "429" or "rate limit" and must not pause the provider.
+    if (response && response.length <= 500 && this.isRateLimitMessage(response)) rateLimited = true;
 
     // Update session ID (same as handleMessage)
     const newSessionId = this.processManager.getSessionId(topicKey);

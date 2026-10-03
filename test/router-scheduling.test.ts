@@ -206,6 +206,15 @@ describe("Director trigger through the router", () => {
     expect(director.accountQuota.get("provider:deepseek")?.resumeAt).toBeGreaterThan(Date.now());
     expect(director.accountQuota.has(h.router.accountManager.getActiveName())).toBe(false);
   });
+
+  test("a long work reply that mentions 429 is a success, not a rate limit", async () => {
+    // The agent may well write about rate limits in its report; only a
+    // short reply (the shape of a real limit message) pauses the provider.
+    const report = "Готово: добавил повтор запроса при HTTP 429 и rate limit от API. " + "Подробности. ".repeat(60);
+    h.scripts.push(opencodeReply(report, SES));
+    const result = await h.router.director.config.onStaleTopic(TOPIC_KEY, state(), options);
+    expect(result).toEqual({ ok: true, account: "provider:deepseek" });
+  });
 });
 
 describe("dashboard sync", () => {
