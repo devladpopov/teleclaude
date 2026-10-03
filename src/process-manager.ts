@@ -2,7 +2,7 @@ import { spawn, execSync, type ChildProcess } from "child_process";
 import { writeFileSync, mkdirSync, existsSync } from "fs";
 import { resolve, join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { cliModelArg, SPAWN_MCP_CONFIG, type Settings } from "./config";
+import { cliModelArg, mcpConfigFlags, type Settings } from "./config";
 import type { AccountManager } from "./account-manager";
 
 const PM_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -256,8 +256,9 @@ export class ProcessManager {
     // Dedicated config file is the only reliable channel.
     //
     // The file is at ~/.claude/spawn-mcp-config.json. Edit it to add or
-    // remove MCPs available to every spawned Claude.
-    args.push("--mcp-config", SPAWN_MCP_CONFIG);
+    // remove MCPs available to every spawned Claude. Skipped while the file
+    // does not exist: claude refuses to start with a missing --mcp-config.
+    args.push(...mcpConfigFlags());
 
     // Резюмируем сессию ТОЛЬКО если у нас настоящий session_id от claude
     // (UUID 8-4-4-4-12). Старые «topic-*» локальные id — это мусор от

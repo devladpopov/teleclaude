@@ -56,6 +56,10 @@ export interface HarnessOptions {
   topic?: Record<string, unknown>;
   /** Files placed under TELECLAUDE_HOME, e.g. { "secrets/deepseek.env": "..." } */
   home?: Record<string, string>;
+  /** Write TELECLAUDE_MCP_CONFIG (spawn-mcp-config.json). Default true. */
+  mcpConfig?: boolean;
+  /** Merged into settings.processes */
+  processes?: Record<string, unknown>;
 }
 
 export const DEEPSEEK = {
@@ -132,6 +136,9 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
   mkdirSync(config);
   mkdirSync(project, { recursive: true });
   mkdirSync(join(home, "memory"), { recursive: true });
+  if (opts.mcpConfig !== false) {
+    writeFileSync(join(home, "spawn-mcp-config.json"), JSON.stringify({ mcpServers: {} }));
+  }
   for (const [rel, content] of Object.entries(opts.home || {})) {
     mkdirSync(join(home, rel, ".."), { recursive: true });
     writeFileSync(join(home, rel), content);
@@ -167,6 +174,7 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
     processes: {
       ttlMinutes: 30, maxConcurrent: 5, claudePath: "claude",
       defaultFlags: ["--dangerously-skip-permissions"], defaultModel: "opus",
+      ...(opts.processes || {}),
     },
     compaction: { reserveTokens: 100000, keepRecentTokens: 50000, enabled: false },
     memory: { revisionIntervalMinutes: 60, maxFileLines: 200, deduplication: true, enabled: false },

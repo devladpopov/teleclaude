@@ -101,6 +101,22 @@ export const MEMORY_BASE_DIR = process.env.TELECLAUDE_MEMORY_DIR ?? join(homedir
  */
 export const SPAWN_MCP_CONFIG = process.env.TELECLAUDE_MCP_CONFIG ?? join(homedir(), ".claude", "spawn-mcp-config.json");
 
+let warnedMissingMcpConfig = false;
+
+/**
+ * ["--mcp-config", path] when the file exists, [] otherwise: `claude -p`
+ * exits with "Invalid MCP configuration: MCP config file not found" for a
+ * missing file, so without it every spawn would fail.
+ */
+export function mcpConfigFlags(path: string = SPAWN_MCP_CONFIG): string[] {
+  if (existsSync(path)) return ["--mcp-config", path];
+  if (!warnedMissingMcpConfig) {
+    warnedMissingMcpConfig = true;
+    console.warn(`[Config] ${path} not found: spawns run without MCP servers (reminders, trigger_topic, browser). See README, "MCP servers for spawned sessions".`);
+  }
+  return [];
+}
+
 /**
  * Режим группы:
  *   "active"        — бот реагирует на все сообщения от разрешённых

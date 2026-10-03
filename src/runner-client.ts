@@ -12,7 +12,7 @@
 import { resolve, dirname } from "path";
 import { readFileSync, existsSync } from "fs";
 import { fileURLToPath } from "url";
-import { cliModelArg, SPAWN_MCP_CONFIG, type Settings } from "./config";
+import { cliModelArg, mcpConfigFlags, SPAWN_MCP_CONFIG, type Settings } from "./config";
 import type { AccountManager } from "./account-manager";
 import { resolveTopicMcpConfig } from "./browser-pool-client";
 import { buildProviderEnv, executorOfSession, type ProviderConfig } from "./providers";
@@ -339,7 +339,8 @@ export class RunnerClient {
         // 2026-05-05: project-a saw playwright; project-b did
         // not). Dedicated config at ~/.claude/spawn-mcp-config.json.
         // mcpConfigPath = статичный конфиг ИЛИ per-topic (browserPool, см. выше).
-        "--mcp-config", mcpConfigPath,
+        // No flag while the file is missing: claude would refuse to start.
+        ...mcpConfigFlags(mcpConfigPath),
         // Per-topic thinking effort (/effort). Runner прокидывает flags в CLI
         // как есть, поэтому изменений на стороне runner не требуется.
         ...(effort ? ["--effort", effort] : []),
