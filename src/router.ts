@@ -630,17 +630,19 @@ export class Router {
           modelOverride: options.modelOverride,
         });
 
-        if (result.ok) {
-          console.log(
-            `[Director] Triggered + spawned ${state.name} (${topicKey}) on ${options.modelOverride}`
-          );
-          return { ok: true, account };
-        } else if (result.rateLimited) {
+        // rateLimited first: a limit can come back as reply text with ok=true
+        // (opencode reports a provider 429 as a result, claude sometimes too).
+        if (result.rateLimited) {
           console.warn(
             `[Director] Rate-limit on ${state.name} for account "${account}". ` +
             `Director will pause and resume after the quota window.`
           );
           return { ok: false, rateLimited: true, account, error: result.error };
+        } else if (result.ok) {
+          console.log(
+            `[Director] Triggered + spawned ${state.name} (${topicKey}) on ${options.modelOverride}`
+          );
+          return { ok: true, account };
         } else {
           console.error(
             `[Director] Spawn failed for ${state.name}: ${result.error}`

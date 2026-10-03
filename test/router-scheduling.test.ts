@@ -191,4 +191,19 @@ describe("Director trigger through the router", () => {
     expect(h.jobs.at(-1).message).toContain("[Director auto] Продолжай: NEXT");
     expect(h.replies()).toContain("[deepseek:deepseek-chat] продолжаю работу");
   });
+
+  test("429 from the provider pauses that provider in Director", async () => {
+    // opencode reports a 429 as a result with the error text, the runner
+    // client resolves with that text: triggerTopicAuto gives
+    // { ok: true, rateLimited: true }, and the rate limit must win.
+    h.scripts.push(opencode429());
+    const result = await h.router.director.config.onStaleTopic(TOPIC_KEY, state(), options);
+    expect(result).toMatchObject({ ok: false, rateLimited: true, account: "provider:deepseek" });
+
+    h.scripts.push(opencode429());
+    const director = h.router.director;
+    await director.fireTrigger({ ...state(), category: "work" }, "provider:deepseek", Date.now());
+    expect(director.accountQuota.get("provider:deepseek")?.resumeAt).toBeGreaterThan(Date.now());
+    expect(director.accountQuota.has(h.router.accountManager.getActiveName())).toBe(false);
+  });
 });
